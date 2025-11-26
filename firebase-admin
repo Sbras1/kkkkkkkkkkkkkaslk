@@ -1,0 +1,92 @@
+// ==================================================
+// 🔥 Firebase Logs Helper — Realtime Database
+// ==================================================
+
+const admin = require("firebase-admin");
+const path = require("path");
+const fs = require("fs");
+
+let appInitialized = false;
+
+function initFirebase() {
+  if (appInitialized) return;
+
+  const serviceAccountPath =
+    process.env.FIREBASE_SERVICE_ACCOUNT_PATH ||
+    path.join(__dirname, "bot-pubg-fd550-firebase-adminsdk-fbsvc-a623e1fe45.json");
+
+  if (!fs.existsSync(serviceAccountPath)) {
+    console.error("❌ ملف خدمة Firebase غير موجود:", serviceAccountPath);
+    process.exit(1);
+  }
+
+  const dbUrl = process.env.FIREBASE_DB_URL;
+  if (!dbUrl) {
+    console.error("❌ FIREBASE_DB_URL غير محدد في ملف .env");
+    process.exit(1);
+  }
+
+  const serviceAccount = require(serviceAccountPath);
+
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+    databaseURL: dbUrl,
+  });
+
+  appInitialized = true;
+  console.log("✅ تم تهيئة Firebase Realtime Database بنجاح.");
+}
+
+function getDb() {
+  initFirebase();
+  return admin.database();
+}
+
+/**
+ * حفظ عملية في سجل التاجر
+ * @param {number|string} traderId
+ * @param {object} data
+ */
+async function logOperation(traderId, data) {
+  const db = getDb();
+  const ref = db.ref("logs").child(String(traderId));
+
+  const payload = {
+    ...data,
+    time: Date.now(),
+  };
+
+  await ref.push(payload);
+}
+
+/**
+ * جلب آخر سجلات لتاجر معيّن
+ * @param {number|string} traderId
+ * @param {{page?:number,pageSize?:number}} options
+ * @returns {Promise<{items:any[], total:number}>}
+ */
+async function getTraderLogs(traderId, { page = 1, pageSize = 10 } = {}) {
+  const db = getDb();
+  const ref = db.ref("logs").child(String(traderId));
+
+  const snap = await ref
+    .orderByChild("time")
+    .limitToLast(page * pageSize)
+    .once("value");
+
+  const val = snap.val() || {};
+
+  const all = Object.values(val).sort(
+    (a, b) => (a.time || 0) - (b.time || 0)
+  );
+
+  const start = Math.max(0, all.length - pageSize);
+  const items = all.slice(start);
+
+  return { items, total: all.length };
+}
+
+module.exports = {
+  logOperation,
+  getTraderLogs,
+};

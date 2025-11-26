@@ -1,0 +1,17 @@
+{
+  "name": "pubg-trader-bot",
+  "version": "1.0.0",
+  "description": "PUBG Trader Bot using Midasbuy API + Firebase logs",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.0",
+    "body-parser": "^2.2.0",
+    "dotenv": "^16.4.5",
+    "express": "^5.1.0",
+    "firebase-admin": "^12.5.0",
+    "node-telegram-bot-api": "^0.66.0"
+  }
+}
