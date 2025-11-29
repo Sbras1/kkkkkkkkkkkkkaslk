@@ -35,6 +35,9 @@ const OWNER_ID = process.env.OWNER_ID ? Number(process.env.OWNER_ID) : null;
 const ADMIN_GROUP_ID = -1001767287162; // قروب الإدارة للتذاكر
 const TRADERS_FILE = "traders.json"; // ملف النسخ الاحتياطي
 
+// 📺 آيدي قناة البث المباشر
+const LOG_CHANNEL_ID = -1001772815254;
+
 const API_BASE_URL = (
   process.env.API_BASE_URL || "https://midasbuy-api.com/api/v1/pubg"
 ).replace(/\/+$/, "");
@@ -108,6 +111,56 @@ function isTrader(userId) {
   if (OWNER_ID && Number(userId) === OWNER_ID) return true;
   const info = traders[String(userId)];
   return isTraderActive(info);
+}
+
+// ===================== دالة البث المباشر 📺 =====================
+async function streamLog(user, action, detail, status) {
+  if (!LOG_CHANNEL_ID) return;
+  
+  // تنسيق الوقت
+  const time = new Date().toLocaleTimeString('en-US', { hour12: false, timeZone: "Asia/Riyadh" });
+  
+  // تحديد الإيموجي والنص العربي حسب الحالة
+  let statusIcon = "✅";
+  let statusText = "نجح";
+  
+  if (status === "success") {
+    statusIcon = "✅";
+    statusText = "نجح";
+  } else if (status === "failed" || status === "invalid") {
+    statusIcon = "❌";
+    statusText = "فشل";
+  } else if (status === "already_used") {
+    statusIcon = "⚠️";
+    statusText = "مستخدم مسبقاً";
+  } else if (status === "activated") {
+    statusIcon = "✅";
+    statusText = "مفعل";
+  } else if (status === "unactivated") {
+    statusIcon = "ℹ️";
+    statusText = "غير مفعل";
+  } else if (status === "bulk_success") {
+    statusIcon = "✅";
+    statusText = "نجح (جماعي)";
+  } else if (status === "bulk_failed") {
+    statusIcon = "❌";
+    statusText = "فشل (جماعي)";
+  } else {
+    statusText = status; // للحالات الأخرى
+  }
+  
+  const msg = 
+    `📺 **عملية جديدة** | ⏰ ${time}\n` +
+    `👤 **التاجر:** [${user.first_name || 'غير معروف'}](tg://user?id=${user.id})\n` +
+    `🛠 **العملية:** ${action}\n` +
+    `📝 **التفاصيل:** \`${detail}\`\n` +
+    `📊 **النتيجة:** ${statusIcon} ${statusText}`;
+
+  try {
+    await bot.sendMessage(LOG_CHANNEL_ID, msg, { parse_mode: "Markdown" });
+  } catch (e) {
+    console.error("فشل البث للقناة:", e.message);
+  }
 }
 
 // ===================== إنشاء البوت =====================
@@ -1013,6 +1066,9 @@ bot.on("message", async (msg) => {
 
         await bot.sendMessage(chatId, reply, saveKeyboard);
 
+        // بث مباشر للاستعلام
+        await streamLog(msg.from, "استعلام لاعب 🎮", `${p.player_name} (${p.player_id})`, "success");
+
         await logOperation(userId, {
           type: "player",
           player_id: p.player_id,
@@ -1076,6 +1132,9 @@ bot.on("message", async (msg) => {
 
           await bot.sendMessage(chatId, reply);
 
+          // بث مباشر للفحص
+          await streamLog(msg.from, "فحص كود 🧪", d.uc_code, "activated");
+
           await logOperation(userId, {
             type: "check",
             code: d.uc_code,
@@ -1093,6 +1152,9 @@ bot.on("message", async (msg) => {
 
           await bot.sendMessage(chatId, reply);
 
+          // بث مباشر للفحص
+          await streamLog(msg.from, "فحص كود 🧪", d.uc_code, "unactivated");
+
           await logOperation(userId, {
             type: "check",
             code: d.uc_code,
@@ -1106,6 +1168,9 @@ bot.on("message", async (msg) => {
             `• وقت الفحص: ${nowStr}`;
 
           await bot.sendMessage(chatId, reply);
+
+          // بث مباشر للفحص
+          await streamLog(msg.from, "فحص كود 🧪", d.uc_code || ucCode, "invalid");
 
           await logOperation(userId, {
             type: "check",
@@ -1208,16 +1273,26 @@ bot.on("message", async (msg) => {
       if (isSuccess) {
         const reply = `✅ تم تفعيل الكود بنجاح\n👤 ${playerName} (${playerId})\n💎 الكود: ${ucCode}`;
         await bot.sendMessage(chatId, reply);
+        
+        // بث مباشر للشحن الفردي
+        await streamLog(msg.from, "شحن فردي ⚡", `${playerName} | ${ucCode}`, "success");
+        
         await logOperation(userId, { type: "activate", player_id: playerId, player_name: playerName, code: ucCode, result: "success" });
       } else {
         // تحديد السبب بدقة
         let errorReason = "غير صالح";
+        let logStatus = "failed";
         if (isAlreadyUsed || innerMsg.includes("already") || res.data?.status === "failed") {
           errorReason = "مفعل سابقاً";
+          logStatus = "already_used";
         }
         
         const reply = `❌ فشل التفعيل (${errorReason})\n👤 ${playerName} (${playerId})\n💎 الكود: ${ucCode}`;
         await bot.sendMessage(chatId, reply);
+        
+        // بث مباشر للشحن الفردي الفاشل
+        await streamLog(msg.from, "شحن فردي ⚡", `${playerName} | ${ucCode}`, logStatus);
+        
         await logOperation(userId, { type: "activate", player_id: playerId, player_name: playerName, code: ucCode, result: "failed" });
       }
     } catch (err) {
@@ -1285,6 +1360,9 @@ bot.on("message", async (msg) => {
                   }
 
                   report += `${i+1}. \`${code}\` : ${statusText}\n`;
+                  
+                  // بث مباشر للشحن الجماعي
+                  await streamLog(msg.from, "شحن جماعي 🚀", `${player.playerName} | ${code}`, logResult);
                   
                   // تسجيل في Firebase
                   logOperation(userId, { 
@@ -1568,6 +1646,10 @@ bot.on("callback_query", async (query) => {
         if (isSuccess) {
           finalReport += `✅ **${item.name}**: تم بنجاح\n`;
           successCount++;
+          
+          // بث مباشر للشحن الجماعي (كلان)
+          await streamLog(query.from, "شحن جماعي 🚀", `${item.name} | ${item.code}`, "success");
+          
           logOperation(userId, {
             type: "activate",
             player_id: item.id,
@@ -1578,11 +1660,17 @@ bot.on("callback_query", async (query) => {
         } else {
           // تحديد السبب بدقة
           let reason = "غير صالح";
+          let logResult = "bulk_failed";
           if (isAlreadyUsed || res.data?.status === "failed") {
             reason = "مفعل مسبقاً";
+            logResult = "already_used";
           }
           
           finalReport += `❌ **${item.name}**: ${reason}\n`;
+          
+          // بث مباشر للشحن الجماعي (كلان) الفاشل
+          await streamLog(query.from, "شحن جماعي 🚀", `${item.name} | ${item.code}`, logResult);
+          
           logOperation(userId, {
             type: "activate",
             player_id: item.id,
