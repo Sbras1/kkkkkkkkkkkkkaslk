@@ -756,9 +756,9 @@ bot.on("message", async (msg) => {
   if (userId !== OWNER_ID && !isInOperation) {
     const lastTime = userCooldowns[userId] || 0;
     const diff = now - lastTime;
-    // 10000 ميلي ثانية = 10 ثواني
-    if (diff < 10000) { 
-      const waitTime = Math.ceil((10000 - diff) / 1000);
+    // 5000 ميلي ثانية = 5 ثواني
+    if (diff < 5000) { 
+      const waitTime = Math.ceil((5000 - diff) / 1000);
       return bot.sendMessage(chatId, `⏳ يرجى الانتظار ${waitTime} ثوانٍ قبل المحاولة التالية.`);
     }
     userCooldowns[userId] = now; // تحديث الوقت
