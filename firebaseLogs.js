@@ -181,7 +181,116 @@ async function getTraderLogs(userId, options = {}) {
   }
 }
 
+// ===================== (جديد) دوال إدارة التجار =====================
+
+// 1. جلب كل التجار عند تشغيل البوت
+async function getAllTraders() {
+  const database = initFirebase();
+  if (!database) {
+    console.warn("⚠️ getAllTraders: Firebase غير متوفر، سيتم استخدام البيانات المحلية.");
+    return {};
+  }
+  try {
+    const snapshot = await database.ref('traders').once('value');
+    return snapshot.val() || {};
+  } catch (err) {
+    console.error("⚠️ getAllTraders: خطأ أثناء القراءة من Firebase:", err.message);
+    return {};
+  }
+}
+
+// 2. حفظ/تحديث تاجر واحد (بدل حفظ الملف كامل)
+async function saveTraderToFirebase(userId, traderData) {
+  const database = initFirebase();
+  if (!database) {
+    console.warn("⚠️ saveTraderToFirebase: Firebase غير متوفر.");
+    return false;
+  }
+  try {
+    await database.ref(`traders/${userId}`).set(traderData);
+    return true;
+  } catch (err) {
+    console.error("⚠️ saveTraderToFirebase: خطأ أثناء الحفظ:", err.message);
+    return false;
+  }
+}
+
+// 3. حذف تاجر
+async function deleteTraderFromFirebase(userId) {
+  const database = initFirebase();
+  if (!database) {
+    console.warn("⚠️ deleteTraderFromFirebase: Firebase غير متوفر.");
+    return false;
+  }
+  try {
+    await database.ref(`traders/${userId}`).remove();
+    return true;
+  } catch (err) {
+    console.error("⚠️ deleteTraderFromFirebase: خطأ أثناء الحذف:", err.message);
+    return false;
+  }
+}
+
+// ===================== (جديد) دوال إدارة المفاتيح =====================
+
+// 1. جلب كل المفاتيح
+async function getAllKeys() {
+  const database = initFirebase();
+  if (!database) {
+    console.warn("⚠️ getAllKeys: Firebase غير متوفر، سيتم استخدام البيانات المحلية.");
+    return [];
+  }
+  try {
+    const snapshot = await database.ref('keys').once('value');
+    const data = snapshot.val();
+    // تحويل الكائن إلى مصفوفة
+    return data ? Object.values(data) : [];
+  } catch (err) {
+    console.error("⚠️ getAllKeys: خطأ أثناء القراءة من Firebase:", err.message);
+    return [];
+  }
+}
+
+// 2. حفظ مفتاح جديد
+async function saveKeyToFirebase(keyData) {
+  const database = initFirebase();
+  if (!database) {
+    console.warn("⚠️ saveKeyToFirebase: Firebase غير متوفر.");
+    return false;
+  }
+  try {
+    // نستخدم الكود نفسه كمعرف (ID) في القاعدة
+    await database.ref(`keys/${keyData.key}`).set(keyData);
+    return true;
+  } catch (err) {
+    console.error("⚠️ saveKeyToFirebase: خطأ أثناء الحفظ:", err.message);
+    return false;
+  }
+}
+
+// 3. حذف مفتاح (بعد الاستخدام)
+async function deleteKeyFromFirebase(keyString) {
+  const database = initFirebase();
+  if (!database) {
+    console.warn("⚠️ deleteKeyFromFirebase: Firebase غير متوفر.");
+    return false;
+  }
+  try {
+    await database.ref(`keys/${keyString}`).remove();
+    return true;
+  } catch (err) {
+    console.error("⚠️ deleteKeyFromFirebase: خطأ أثناء الحذف:", err.message);
+    return false;
+  }
+}
+
 module.exports = {
   logOperation,
-  getTraderLogs
+  getTraderLogs,
+  getAllTraders,
+  saveTraderToFirebase,
+  deleteTraderFromFirebase,
+  getAllKeys,
+  saveKeyToFirebase,
+  deleteKeyFromFirebase
 };

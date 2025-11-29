@@ -13,7 +13,16 @@ require("dotenv").config();
 const fs = require("fs");
 const TelegramBot = require("node-telegram-bot-api");
 const axios = require("axios");
-const { logOperation, getTraderLogs } = require("./firebaseLogs");
+const { 
+  logOperation, 
+  getTraderLogs,
+  getAllTraders,
+  saveTraderToFirebase,
+  deleteTraderFromFirebase,
+  getAllKeys,
+  saveKeyToFirebase,
+  deleteKeyFromFirebase
+} = require("./firebaseLogs");
 
 // تعطيل تحذير DeprecationWarning للملفات
 process.env.NTBA_FIX_350 = 1;
@@ -24,6 +33,7 @@ const BOT_TOKEN = (process.env.BOT_TOKEN || "").trim();
 const API_KEY = (process.env.API_KEY || "").trim();
 const OWNER_ID = process.env.OWNER_ID ? Number(process.env.OWNER_ID) : null;
 const ADMIN_GROUP_ID = -1001767287162; // قروب الإدارة للتذاكر
+const TRADERS_FILE = "traders.json"; // ملف النسخ الاحتياطي
 
 const API_BASE_URL = (
   process.env.API_BASE_URL || "https://midasbuy-api.com/api/v1/pubg"
@@ -46,69 +56,39 @@ console.log(`🤖 جاري تشغيل البوت (النسخة الكاملة)..
 console.log(`🌐 API_BASE_URL = ${API_BASE_URL}`);
 
 // ===================== متغيرات الأنظمة الجديدة =====================
-const KEYS_FILE = "keys.json"; // ملف تخزين أكواد التفعيل
 let activationKeys = []; // مصفوفة الأكواد في الذاكرة
 const userCooldowns = {}; // لتخزين توقيت آخر عملية (الحماية)
 
-// دالة تحميل المفاتيح (أضفها بجانب دالة loadTraders)
-function loadKeys() {
-  try {
-    if (fs.existsSync(KEYS_FILE)) {
-      activationKeys = JSON.parse(fs.readFileSync(KEYS_FILE, "utf8"));
-    } else {
-      fs.writeFileSync(KEYS_FILE, "[]", "utf8");
-    }
-  } catch (err) { 
-    activationKeys = []; 
-  }
-}
-
-function saveKeys() {
-  fs.writeFileSync(KEYS_FILE, JSON.stringify(activationKeys, null, 2), "utf8");
-}
-
-loadKeys(); // تشغيل التحميل عند البدء
-
 // ===================== إعداد التجّار =====================
 
-const TRADERS_FILE = "traders.json";
 let traders = {};
 
-function loadTraders() {
+// ===================== تهيئة البيانات من Firebase =====================
+async function initializeData() {
+  console.log("📡 جاري تحميل البيانات من Firebase...");
+  
   try {
-    if (fs.existsSync(TRADERS_FILE)) {
-      const raw = fs.readFileSync(TRADERS_FILE, "utf8").trim();
-      if (!raw) {
-        traders = {};
-      } else {
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === "object") {
-          if (parsed.traders && typeof parsed.traders === "object") {
-            // تحويل المصفوفة لكائن إذا كانت مصفوفة
-            traders = Array.isArray(parsed.traders) ? {} : parsed.traders;
-          } else {
-            traders = Array.isArray(parsed) ? {} : parsed;
-          }
-        } else {
-          traders = {};
-        }
-      }
-    } else {
-      traders = {};
-      saveTraders();
-    }
+    // تحميل التجار
+    traders = await getAllTraders();
+    console.log(`✅ تم تحميل ${Object.keys(traders).length} تاجر من Firebase`);
+    
+    // تحميل المفاتيح
+    activationKeys = await getAllKeys();
+    console.log(`✅ تم تحميل ${activationKeys.length} مفتاح من Firebase`);
   } catch (err) {
-    console.error("⚠️ خطأ أثناء تحميل traders.json:", err.message);
+    console.error("⚠️ خطأ أثناء تهيئة البيانات:", err.message);
     traders = {};
+    activationKeys = [];
   }
 }
 
-function saveTraders() {
+// دالة حفظ نسخة احتياطية محلية من Firebase
+function saveBackupToFile() {
   try {
     const data = { traders };
     fs.writeFileSync(TRADERS_FILE, JSON.stringify(data, null, 2), "utf8");
   } catch (err) {
-    console.error("⚠️ خطأ أثناء حفظ traders.json:", err.message);
+    console.error("⚠️ خطأ في حفظ النسخة الاحتياطية:", err.message);
   }
 }
 
@@ -130,22 +110,25 @@ function isTrader(userId) {
   return isTraderActive(info);
 }
 
-loadTraders();
-
 // ===================== إنشاء البوت =====================
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 let botUsername = null;
 
-bot
-  .getMe()
-  .then((me) => {
-    botUsername = me.username;
-    console.log(`✅ تم تشغيل البوت: @${botUsername}`);
-  })
-  .catch((err) => {
-    console.error("⚠️ getMe error:", err.message);
-  });
+// تهيئة البيانات قبل بدء البوت
+(async () => {
+  await initializeData();
+  
+  bot
+    .getMe()
+    .then((me) => {
+      botUsername = me.username;
+      console.log(`✅ تم تشغيل البوت: @${botUsername}`);
+    })
+    .catch((err) => {
+      console.error("⚠️ getMe error:", err.message);
+    });
+})();
 
 // ===================== إدارة الجلسات =====================
 
@@ -386,7 +369,10 @@ bot.onText(/^\/اضف_تاجر(?:\s+(.+))?$/i, async (msg, match) => {
     expiresAt: newExpiresAt,
     active: true,
   };
-  saveTraders();
+  
+  // حفظ في Firebase
+  await saveTraderToFirebase(String(targetId), traders[String(targetId)]);
+  saveBackupToFile();
 
   let txt = "✅ تم إضافة/تحديث التاجر.\n";
   txt += `• ID: ${targetId}\n`;
@@ -397,11 +383,11 @@ bot.onText(/^\/اضف_تاجر(?:\s+(.+))?$/i, async (msg, match) => {
 
   await bot.sendMessage(chatId, txt);
   
-  // 💾 نسخ احتياطي تلقائي (إضافة يدوية)
+  // إرسال نسخة احتياطية للمالك
   if (OWNER_ID) {
     try {
       await bot.sendDocument(OWNER_ID, TRADERS_FILE, { 
-        caption: "💾 نسخ احتياطي تلقائي (إضافة يدوية)"
+        caption: `💾 نسخ احتياطي تلقائي (إضافة تاجر: ${targetId})`
       });
     } catch (err) {
       console.error("فشل إرسال النسخة الاحتياطية:", err.message);
@@ -446,12 +432,26 @@ bot.onText(/^\/حذف_تاجر(?:\s+(.+))?$/i, async (msg, match) => {
   }
 
   delete traders[String(targetId)];
-  saveTraders();
+  
+  // حذف من Firebase
+  await deleteTraderFromFirebase(String(targetId));
+  saveBackupToFile();
 
   await bot.sendMessage(
     chatId,
     `✅ تم حذف التاجر من القائمة.\n• ID: ${targetId}`
   );
+  
+  // إرسال نسخة احتياطية للمالك
+  if (OWNER_ID) {
+    try {
+      await bot.sendDocument(OWNER_ID, TRADERS_FILE, { 
+        caption: `💾 نسخ احتياطي تلقائي (حذف تاجر: ${targetId})`
+      });
+    } catch (err) {
+      console.error("فشل إرسال النسخة الاحتياطية:", err.message);
+    }
+  }
 });
 
 bot.onText(/^\/قائمة_التجار$/i, async (msg) => {
@@ -656,8 +656,11 @@ bot.onText(/^\/توليد (\d+)/, async (msg, match) => {
   // إنشاء كود عشوائي
   const key = 'KEY-' + Math.random().toString(36).substr(2, 9).toUpperCase();
   
-  activationKeys.push({ key: key, days: days });
-  saveKeys();
+  const keyData = { key: key, days: days };
+  activationKeys.push(keyData);
+  
+  // حفظ المفتاح في Firebase
+  await saveKeyToFirebase(keyData);
   
   await bot.sendMessage(msg.chat.id, `🔑 تم توليد مفتاح جديد:\n\`${key}\`\n⏳ المدة: ${days} يوم`, { parse_mode: "Markdown" });
 });
@@ -700,19 +703,21 @@ bot.onText(/^\/تفعيل (.+)/, async (msg, match) => {
     traders[String(userId)].active = true;
   }
 
-  saveTraders();
+  // حفظ التاجر في Firebase
+  await saveTraderToFirebase(String(userId), traders[String(userId)]);
+  saveBackupToFile();
 
   // حذف المفتاح بعد الاستخدام
+  await deleteKeyFromFirebase(keyData.key);
   activationKeys.splice(keyIndex, 1);
-  saveKeys();
 
   await bot.sendMessage(chatId, `✅ تم تفعيل اشتراكك بنجاح!\n⏳ المدة المضافة: ${keyData.days} يوم.\n🗓 ينتهي في: ${formatDateTimeFromUnix(traders[String(userId)].expiresAt)}`, { parse_mode: "Markdown" });
-
-  // 💾 نسخ احتياطي تلقائي
+  
+  // إرسال نسخة احتياطية للمالك
   if (OWNER_ID) {
     try {
       await bot.sendDocument(OWNER_ID, TRADERS_FILE, { 
-        caption: `💾 نسخ احتياطي تلقائي (تفعيل جديد: ${userId})`
+        caption: `💾 نسخ احتياطي تلقائي (تفعيل اشتراك: ${userId})`
       });
     } catch (err) {
       console.error("فشل إرسال النسخة الاحتياطية:", err.message);
@@ -860,7 +865,7 @@ bot.on("message", async (msg) => {
     session.temp = {};
     await bot.sendMessage(
       chatId,
-      "أرسل الآن ID اللاعب الذي تريد تفعيل الكود له (أرقام فقط)."
+      "أرسل الآن ID اللاعب الذي تريد تفعيل الكود له (لا يوجد ايصال او فاتورة من ميداس)."
     );
     return;
   }
@@ -1400,7 +1405,9 @@ bot.on("callback_query", async (query) => {
     }
 
     traders[String(userId)].savedPlayers.push({ id: pid, name: pname });
-    saveTraders();
+    
+    // حفظ في Firebase
+    await saveTraderToFirebase(String(userId), traders[String(userId)]);
     
     await bot.answerCallbackQuery(query.id, { text: "✅ تم حفظ اللاعب في قائمتك." });
     return;
@@ -1466,7 +1473,9 @@ bot.on("callback_query", async (query) => {
         expiresAt: newExpiresAt,
         active: true,
       };
-      saveTraders();
+      
+      // حفظ في Firebase
+      await saveTraderToFirebase(String(targetId), traders[String(targetId)]);
 
       await bot.editMessageText(
         query.message.text + "\n\n✅ تمت الإضافة بنجاح!",
