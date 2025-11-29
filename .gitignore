@@ -4,3 +4,9 @@ node_modules
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# ملفات سرية (Firebase & Keys)
+service-account.json
+keys.json
+traders.json
+logs.json
