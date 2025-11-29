@@ -1,5 +1,12 @@
 // ==================================================
-// 🤖 PUBG Trader Bot — Midasbuy + Firebase Logs + Traders + Subscription + Inline
+// 🤖 PUBG Trader Bot — ULTIMATE VERSION
+// المميزات:
+// 1. نظام التجار والاشتراكات
+// 2. Midasbuy API (فردي + جماعي)
+// 3. نظام الكلان (Bulk IDs)
+// 4. نظام الستاك (Bulk Codes)
+// 5. Inline Mode
+// 6. سجلات Firebase مفصلة
 // ==================================================
 
 require("dotenv").config();
@@ -7,6 +14,9 @@ const fs = require("fs");
 const TelegramBot = require("node-telegram-bot-api");
 const axios = require("axios");
 const { logOperation, getTraderLogs } = require("./firebaseLogs");
+
+// تعطيل تحذير DeprecationWarning للملفات
+process.env.NTBA_FIX_350 = 1;
 
 // ===================== الإعدادات من .env =====================
 
@@ -31,8 +41,32 @@ if (!API_BASE_URL) {
   process.exit(1);
 }
 
-console.log(`🤖 جاري تشغيل البوت...`);
+console.log(`🤖 جاري تشغيل البوت (النسخة الكاملة)...`);
 console.log(`🌐 API_BASE_URL = ${API_BASE_URL}`);
+
+// ===================== متغيرات الأنظمة الجديدة =====================
+const KEYS_FILE = "keys.json"; // ملف تخزين أكواد التفعيل
+let activationKeys = []; // مصفوفة الأكواد في الذاكرة
+const userCooldowns = {}; // لتخزين توقيت آخر عملية (الحماية)
+
+// دالة تحميل المفاتيح (أضفها بجانب دالة loadTraders)
+function loadKeys() {
+  try {
+    if (fs.existsSync(KEYS_FILE)) {
+      activationKeys = JSON.parse(fs.readFileSync(KEYS_FILE, "utf8"));
+    } else {
+      fs.writeFileSync(KEYS_FILE, "[]", "utf8");
+    }
+  } catch (err) { 
+    activationKeys = []; 
+  }
+}
+
+function saveKeys() {
+  fs.writeFileSync(KEYS_FILE, JSON.stringify(activationKeys, null, 2), "utf8");
+}
+
+loadKeys(); // تشغيل التحميل عند البدء
 
 // ===================== إعداد التجّار =====================
 
@@ -49,9 +83,10 @@ function loadTraders() {
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === "object") {
           if (parsed.traders && typeof parsed.traders === "object") {
-            traders = parsed.traders;
+            // تحويل المصفوفة لكائن إذا كانت مصفوفة
+            traders = Array.isArray(parsed.traders) ? {} : parsed.traders;
           } else {
-            traders = parsed;
+            traders = Array.isArray(parsed) ? {} : parsed;
           }
         } else {
           traders = {};
@@ -126,11 +161,27 @@ function resetSession(chatId) {
   sessions.set(chatId, {});
 }
 
+// ===================== دالة إرسال الخطأ للمالك (Error Reporter) 🐞 =====================
+
+async function reportErrorToAdmin(errorMsg, context = "") {
+  if (OWNER_ID) {
+    const msg = `🐞 تنبيه خطأ برمجي:\n\n📝 الموقع: ${context}\n❌ الخطأ: ${errorMsg}`;
+    try { 
+      await bot.sendMessage(OWNER_ID, msg); 
+    } catch (e) {
+      console.error("فشل إرسال تقرير الخطأ للمالك:", e.message);
+    }
+  }
+}
+
 // ===================== دوال مساعدة =====================
 
 function isDigits(text) {
   return /^[0-9]+$/.test((text || "").trim());
 }
+
+// ✅ دالة الانتظار (Delay) مهمة جداً لنظام الكلان
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function formatDateTimeFromUnix(unixOrMs) {
   if (!unixOrMs && unixOrMs !== 0) return "-";
@@ -159,12 +210,10 @@ function formatNow() {
 function normalizeCodeStatus(rawStatus) {
   const s = (rawStatus || "").toString().toLowerCase().trim();
 
-  // مفعّل
   if (["activated", "success", "used", "done"].includes(s)) {
     return "activated";
   }
 
-  // غير مفعّل / متاح
   if (
     [
       "unactivated",
@@ -179,19 +228,16 @@ function normalizeCodeStatus(rawStatus) {
     return "unactivated";
   }
 
-  // غير صالح
   if (["failed", "invalid", "error"].includes(s)) {
     return "failed";
   }
 
-  // أي حالة غريبة نعتبره غير مفعّل (أأمن لك)
   return "unactivated";
 }
 
 async function apiPost(endpoint, body, label = "") {
   const url = `${API_BASE_URL}${endpoint}`;
-  console.log(`🔗 ${label || "API"} URL:`, url);
-  console.log(`📦 ${label || "API"} body:`, body);
+  // console.log(`🔗 ${label || "API"} URL:`, url); // تم الإخفاء لتخفيف الـ Logs
 
   const res = await axios.post(url, body, {
     headers: {
@@ -199,7 +245,7 @@ async function apiPost(endpoint, body, label = "") {
       "X-Api-Key": API_KEY,
       Accept: "application/json",
     },
-    timeout: 15000,
+    timeout: 25000, // زيادة الوقت قليلاً للعمليات الكبيرة
   });
 
   return res.data;
@@ -231,18 +277,47 @@ async function activateUcCode(playerId, ucCode) {
   );
 }
 
+// ✅ دالة الشحن الجماعي الجديدة (Bulk API Endpoint)
+async function activateBulkUcCodes(playerId, codesArray) {
+  return apiPost(
+    "/bulkActivate", 
+    { 
+        player_id: Number(playerId), 
+        uc_codes: codesArray 
+    },
+    "bulkActivate"
+  );
+}
+
 // ===================== لوحة التحكم الرئيسية =====================
 
 function mainMenuKeyboard() {
   return {
     reply_markup: {
       keyboard: [
-        ["🎮 استعلام عن لاعب", "🧪 فحص كود"],
-        ["⚡ تفعيل كود", "📒 سجلي"],
-        ["👤 حسابي", "💳 الاشتراك"],
+        // الصف الأول
+        [
+            { text: "⚡ تفعيل كود" }, 
+            { text: "🚀 تفعيل جماعي" }
+        ],
+        // الصف الثاني
+        [
+            { text: "🧪 فحص كود" }, 
+            { text: "🎮 استعلام عن ID" }
+        ],
+        // الصف الثالث
+        [
+            { text: "👤 حسابي" }, 
+            { text: "📒 سجلي" },
+            { text: "💳 الاشتراك" }
+        ],
+        // الصف الرابع
+        [
+            { text: "🎫 فتح تذكرة" }
+        ]
       ],
       resize_keyboard: true,
-      one_time_keyboard: false,
+      one_time_keyboard: false
     },
   };
 }
@@ -297,13 +372,13 @@ bot.onText(/^\/اضف_تاجر(?:\s+(.+))?$/i, async (msg, match) => {
   const now = Date.now();
   const durationMs = 30 * 24 * 60 * 60 * 1000; // شهر
 
-  const existing = traders[targetId];
+  const existing = traders[String(targetId)];
   const registeredAt = existing?.registeredAt || now;
   const newExpiresAt = existing?.expiresAt
     ? Number(existing.expiresAt) + durationMs
     : now + durationMs;
 
-  traders[targetId] = {
+  traders[String(targetId)] = {
     username: targetUsername,
     name: targetName,
     registeredAt,
@@ -320,6 +395,17 @@ bot.onText(/^\/اضف_تاجر(?:\s+(.+))?$/i, async (msg, match) => {
   txt += `• ينتهي الاشتراك في: ${formatDateTimeFromUnix(newExpiresAt)}\n`;
 
   await bot.sendMessage(chatId, txt);
+  
+  // 💾 نسخ احتياطي تلقائي (إضافة يدوية)
+  if (OWNER_ID) {
+    try {
+      await bot.sendDocument(OWNER_ID, TRADERS_FILE, { 
+        caption: "💾 نسخ احتياطي تلقائي (إضافة يدوية)"
+      });
+    } catch (err) {
+      console.error("فشل إرسال النسخة الاحتياطية:", err.message);
+    }
+  }
 });
 
 bot.onText(/^\/حذف_تاجر(?:\s+(.+))?$/i, async (msg, match) => {
@@ -354,11 +440,11 @@ bot.onText(/^\/حذف_تاجر(?:\s+(.+))?$/i, async (msg, match) => {
     );
   }
 
-  if (!traders[targetId]) {
+  if (!traders[String(targetId)]) {
     return bot.sendMessage(chatId, "ℹ️ هذا ID غير موجود في قائمة التجّار.");
   }
 
-  delete traders[targetId];
+  delete traders[String(targetId)];
   saveTraders();
 
   await bot.sendMessage(
@@ -418,7 +504,7 @@ function formatTraderAccount(user, info) {
     }
   }
 
-  let txt = "👤 حسابي كتاجر:\n";
+  let txt = "👤 حسابي :\n";
   txt += `• ID: ${id}\n`;
   txt += `• الاسم: ${name}\n`;
   txt += `• اليوزر: ${username}\n`;
@@ -436,12 +522,46 @@ bot.onText(/^\/start/i, async (msg) => {
 
   const info = traders[String(userId)];
 
+  // 🔔 إشعار المالك بكل من يستخدم البوت (جديد أو قديم)
+  if (OWNER_ID && userId !== OWNER_ID) {
+    try {
+      const userName = [msg.from.first_name, msg.from.last_name].filter(Boolean).join(" ") || "غير معروف";
+      const userUsername = msg.from.username ? `@${msg.from.username}` : "لا يوجد";
+      const isRegistered = isTrader(userId);
+      const status = isRegistered ? "✅ مشترك نشط" : "⚠️ غير مشترك";
+      
+      const notificationText = 
+        `🔔 شخص ${isRegistered ? 'مشترك' : 'جديد'} استخدم البوت!\n\n` +
+        `👤 الاسم: ${userName}\n` +
+        `🆔 الآيدي: ${userId}\n` +
+        `📱 اليوزر: ${userUsername}\n` +
+        `📊 الحالة: ${status}\n` +
+        `⏰ الوقت: ${formatNow()}`;
+
+      const notificationKeyboard = {
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: "➕ إضافة كتاجر (شهر)", callback_data: `add_trader:${userId}` },
+            ],
+            [
+              { text: "❌ تجاهل", callback_data: "ignore_notification" }
+            ]
+          ]
+        }
+      };
+
+      await bot.sendMessage(OWNER_ID, notificationText, notificationKeyboard);
+    } catch (err) {
+      console.error("خطأ في إرسال الإشعار للمالك:", err.message);
+    }
+  }
+
   if (!isTrader(userId)) {
     const txt =
-      "⚠️ هذا البوت مخصص لتجّار شحن PUBG فقط.\n\n" +
-      "يمكنك مشاهدة الأزرار، لكن استخدام المزايا يحتاج اشتراك كتاجر.\n\n" +
+      "⚠️ هذا البوت مخصص لتجّار PUBG فقط.\n\n" +
       "للاشتراك أو الاستفسار:\n" +
-      "• راسل مالك البوت على تيليجرام: @YOUR_USERNAME";
+      "• راسل مالك البوت على تيليجرام: @Sbras_1";
     await bot.sendMessage(chatId, txt, mainMenuKeyboard());
     return;
   }
@@ -449,6 +569,8 @@ bot.onText(/^\/start/i, async (msg) => {
   let welcome = "أهلاً بك في بوت تاجر PUBG 💳\n\n";
   welcome += formatTraderAccount(msg.from, info);
   welcome += "\n\nيمكنك عبر هذا البوت:\n";
+  welcome += "• تفعيل جماعي لـ (2-5) لاعبين.\n";
+  welcome += "• تفعيل عدة أكواد للاعب واحد (Stack).\n";
   welcome += "• استعلام عن اسم اللاعب عن طريق الـ ID.\n";
   welcome += "• فحص أكواد UC ومعرفة حالتها.\n";
   welcome += "• تفعيل أكواد UC على حساب اللاعب.\n\n";
@@ -478,14 +600,14 @@ bot.onText(/^\/الاشتراك$/i, async (msg) => {
 
   const txt =
     "💳 تفاصيل الاشتراك في بوت التاجر:\n\n" +
-    "• 49 ريال / شهر — تاجر واحد\n" +
+    "• 45 ريال / 12$ — شهر \n" +
     "  يشمل:\n" +
     "  – استعلام اللاعبين بالـ ID\n" +
-    "  – فحص أكواد UC\n" +
+    "  – فحص تاريخ أكواد UC\n" +
     "  – تفعيل الأكواد على حسابات العملاء\n" +
     "  – عرض سجل عملياتك من داخل البوت\n\n" +
     "للاشتراك أو الاستفسار:\n" +
-    "• راسل مالك البوت على تيليجرام: @YOUR_USERNAME";
+    "• راسل مالك البوت على تيليجرام: @Sbras_1";
 
   await bot.sendMessage(chatId, txt, { disable_web_page_preview: true });
 });
@@ -493,15 +615,7 @@ bot.onText(/^\/الاشتراك$/i, async (msg) => {
 // ===================== دالة إرسال ملخص سجلي =====================
 
 async function sendLogsSummary(chatId, userId) {
-  const { items } = await getTraderLogs(userId, { limit: 500 });
-  // حساب الإحصائيات محليًا
-  const stats = { player: 0, check: 0, activate: 0 };
-  for (const op of items) {
-    if (op.type && stats.hasOwnProperty(op.type)) {
-      stats[op.type]++;
-    }
-  }
-
+  const { stats } = await getTraderLogs(userId, { limit: 500 });
   const text =
     "📒 ملخص عملياتك:\n\n" +
     `• عدد استعلامات اللاعبين: ${stats.player}\n` +
@@ -536,6 +650,80 @@ bot.onText(/^\/سجلي$/i, async (msg) => {
   await sendLogsSummary(chatId, userId);
 });
 
+// ===================== نظام أكواد التجديد التلقائي 🔑 =====================
+
+// 🅰️ أمر للمالك: توليد مفتاح (مثال: /توليد 30)
+bot.onText(/^\/توليد (\d+)/, async (msg, match) => {
+  if (msg.from.id !== OWNER_ID) return;
+  const days = parseInt(match[1]);
+  
+  // إنشاء كود عشوائي
+  const key = 'KEY-' + Math.random().toString(36).substr(2, 9).toUpperCase();
+  
+  activationKeys.push({ key: key, days: days });
+  saveKeys();
+  
+  await bot.sendMessage(msg.chat.id, `🔑 تم توليد مفتاح جديد:\n\`${key}\`\n⏳ المدة: ${days} يوم`, { parse_mode: "Markdown" });
+});
+
+// 🅱️ أمر للمستخدم: تفعيل المفتاح (مثال: /تفعيل KEY-XXXX)
+bot.onText(/^\/تفعيل (.+)/, async (msg, match) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  const inputKey = match[1].trim();
+
+  // البحث عن المفتاح
+  const keyIndex = activationKeys.findIndex(k => k.key === inputKey);
+  
+  if (keyIndex === -1) {
+    return bot.sendMessage(chatId, "❌ هذا الكود غير صالح أو مستخدم من قبل.");
+  }
+
+  const keyData = activationKeys[keyIndex];
+  const durationMs = keyData.days * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+
+  // تحديث أو إنشاء التاجر
+  if (!traders[String(userId)]) {
+    const userName = [msg.from.first_name, msg.from.last_name].filter(Boolean).join(" ") || null;
+    const userUsername = msg.from.username ? `@${msg.from.username}` : null;
+    
+    traders[String(userId)] = { 
+      username: userUsername,
+      name: userName,
+      active: true, 
+      registeredAt: now, 
+      expiresAt: now + durationMs
+    };
+  } else {
+    // تمديد الاشتراك
+    const currentExpire = traders[String(userId)].expiresAt || now;
+    // إذا منتهي يبدأ من الآن، إذا لا يضاف على القديم
+    const baseTime = (currentExpire < now) ? now : currentExpire;
+    traders[String(userId)].expiresAt = baseTime + durationMs;
+    traders[String(userId)].active = true;
+  }
+
+  saveTraders();
+
+  // حذف المفتاح بعد الاستخدام
+  activationKeys.splice(keyIndex, 1);
+  saveKeys();
+
+  await bot.sendMessage(chatId, `✅ تم تفعيل اشتراكك بنجاح!\n⏳ المدة المضافة: ${keyData.days} يوم.\n🗓 ينتهي في: ${formatDateTimeFromUnix(traders[String(userId)].expiresAt)}`, { parse_mode: "Markdown" });
+
+  // 💾 نسخ احتياطي تلقائي
+  if (OWNER_ID) {
+    try {
+      await bot.sendDocument(OWNER_ID, TRADERS_FILE, { 
+        caption: `💾 نسخ احتياطي تلقائي (تفعيل جديد: ${userId})`
+      });
+    } catch (err) {
+      console.error("فشل إرسال النسخة الاحتياطية:", err.message);
+    }
+  }
+});
+
 // ===================== التعامل مع الأزرار والرسائل =====================
 
 bot.on("message", async (msg) => {
@@ -543,7 +731,7 @@ bot.on("message", async (msg) => {
   const userId = msg.from.id;
   const text = (msg.text || "").trim();
 
-  // أوامر نصية نعالجها في onText
+  // أوامر نصية نعالجها في onText (لتجنب التكرار)
   if (
     /^\/start/i.test(text) ||
     /^\/سجلي$/i.test(text) ||
@@ -551,25 +739,43 @@ bot.on("message", async (msg) => {
     /^\/حسابي$/i.test(text) ||
     /^\/اضف_تاجر/i.test(text) ||
     /^\/حذف_تاجر/i.test(text) ||
-    /^\/قائمة_التجار$/i.test(text)
+    /^\/قائمة_التجار$/i.test(text) ||
+    /^\/توليد/i.test(text) ||
+    /^\/تفعيل/i.test(text)
   ) {
     return;
   }
 
   const session = getSession(chatId);
 
+  // 🛡️ نظام الحماية من السبام (Cooldown) - 10 ثواني
+  // فقط للأزرار الرئيسية، وليس أثناء العمليات (modes)
+  const now = Date.now();
+  const isInOperation = session.mode && session.mode !== "";
+  
+  if (userId !== OWNER_ID && !isInOperation) {
+    const lastTime = userCooldowns[userId] || 0;
+    const diff = now - lastTime;
+    // 10000 ميلي ثانية = 10 ثواني
+    if (diff < 10000) { 
+      const waitTime = Math.ceil((10000 - diff) / 1000);
+      return bot.sendMessage(chatId, `⏳ يرجى الانتظار ${waitTime} ثوانٍ قبل المحاولة التالية.`);
+    }
+    userCooldowns[userId] = now; // تحديث الوقت
+  }
+
   // زر الاشتراك — يعمل للجميع
   if (text === "💳 الاشتراك") {
     const txt =
       "💳 تفاصيل الاشتراك في بوت التاجر:\n\n" +
-      "• 49 ريال / شهر — تاجر واحد\n" +
+      "• 55 ريال / 15$ — شهر \n" +
       "  يشمل:\n" +
       "  – استعلام اللاعبين بالـ ID\n" +
-      "  – فحص أكواد UC\n" +
+      "  – فحص تاريخ أكواد UC\n" +
       "  – تفعيل الأكواد على حسابات العملاء\n" +
       "  – عرض سجل عملياتك من داخل البوت\n\n" +
       "للاشتراك أو الاستفسار:\n" +
-      "• راسل مالك البوت على تيليجرام: @YOUR_USERNAME";
+      "• راسل مالك البوت على تيليجرام: @Sbras_1";
 
     await bot.sendMessage(chatId, txt, { disable_web_page_preview: true });
     return;
@@ -584,18 +790,26 @@ bot.on("message", async (msg) => {
         "⚠️ لست مسجلاً كتاجر بعد.\nتواصل مع مالك البوت للاشتراك."
       );
     }
-    const t = formatTraderAccount(msg.from, info);
-    await bot.sendMessage(chatId, t);
+    
+    const opts = {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "👥 جهات الاتصال (لاعبيني)", callback_data: "my_players" }]
+        ]
+      }
+    };
+    
+    await bot.sendMessage(chatId, formatTraderAccount(msg.from, info), opts);
     return;
   }
 
-  // غير تاجر؟ نرجع رسالة منع
-  if (!isTrader(userId)) {
+  // غير تاجر؟ نرجع رسالة منع (إلا إذا ضغط زر التذكرة - له رسالة خاصة)
+  if (!isTrader(userId) && text !== "🎫 فتح تذكرة") {
     const txt =
-      "⚠️ هذا البوت مخصص لتجّار شحن PUBG فقط.\n\n" +
+      "⚠️ هذا البوت مخصص لتجّار PUBG فقط.\n\n" +
       "لا يمكنك استخدام هذه الميزة قبل الاشتراك كتاجر.\n\n" +
       "للاشتراك أو الاستفسار:\n" +
-      "• راسل مالك البوت على تيليجرام: @YOUR_USERNAME";
+      "• راسل مالك البوت على تيليجرام: @Sbras_1";
     await bot.sendMessage(chatId, txt);
     return;
   }
@@ -607,7 +821,7 @@ bot.on("message", async (msg) => {
   }
 
   // --------- القائمة الرئيسية ----------
-  if (text === "🎮 استعلام عن لاعب") {
+ if (text === "🎮 استعلام عن ID") { // ✅ تم التعديل ليطابق الزر الجديد
     session.mode = "WAIT_PLAYER_LOOKUP_ID";
     await bot.sendMessage(
       chatId,
@@ -632,6 +846,105 @@ bot.on("message", async (msg) => {
       chatId,
       "أرسل الآن ID اللاعب الذي تريد تفعيل الكود له (أرقام فقط)."
     );
+    return;
+  }
+
+  // ==========================================
+  // 🚀 بداية منطق التفعيل الجماعي (كلان) - عدة لاعبين
+  // ==========================================
+  if (text === "🚀 تفعيل جماعي") {
+    session.mode = "WAIT_BULK_IDS";
+    session.bulkData = []; // تهيئة المصفوفة
+    await bot.sendMessage(chatId, 
+      "🚀 **نظام تفعيل الكلان (عدة لاعبين)**\n\n" +
+      "1️⃣ أرسل قائمة الآيديات الآن (كل آيدي في سطر).\n" +
+      "⚠️ الحد المسموح: من **2** إلى **5** آيديات.\n\n" +
+      "مثال:\n512345678\n598765432", 
+      { parse_mode: "Markdown" }
+    );
+    return;
+  }
+
+  // معالجة الآيديات في الوضع الجماعي (كلان)
+  if (session.mode === "WAIT_BULK_IDS") {
+    // تقسيم النص لأسطر واستخراج الأرقام فقط
+    const ids = text.split('\n').map(l => l.trim()).filter(l => isDigits(l));
+
+    if (ids.length < 2 || ids.length > 5) {
+      return bot.sendMessage(chatId, "❌ العدد غير صحيح!\nيجب إرسال من 2 إلى 5 آيديات في الرسالة الواحدة.\nحاول مرة أخرى.");
+    }
+
+    await bot.sendMessage(chatId, `⏳ جاري فحص ${ids.length} آيديات... يرجى الانتظار.`);
+
+    let validPlayers = [];
+    
+    // فحص الآيديات واحداً تلو الآخر
+    for (const id of ids) {
+        try {
+            const res = await getPlayerInfo(id);
+            if (res.success && res.data && res.data.player_name) {
+                validPlayers.push({ id: id, name: res.data.player_name });
+            } else {
+                return bot.sendMessage(chatId, `❌ توقف! الآيدي (${id}) غير صحيح أو غير موجود.\nأعد إرسال القائمة الصحيحة بالكامل.`);
+            }
+        } catch (e) {
+            return bot.sendMessage(chatId, "❌ حدث خطأ في الاتصال أثناء فحص الآيديات.");
+        }
+        // انتظار بسيط جداً لعدم إرهاق السيرفر في الفحص
+        await delay(300);
+    }
+
+    // حفظ اللاعبين الصحيحين في الجلسة
+    session.bulkData = validPlayers;
+    session.mode = "WAIT_BULK_CODES";
+
+    let msgIds = "✅ تم التحقق من اللاعبين:\n";
+    validPlayers.forEach((p, i) => {
+        msgIds += `${i+1}. ${p.name} (${p.id})\n`;
+    });
+    msgIds += `\n👇 **الآن أرسل ${validPlayers.length} أكواد** (كل كود في سطر) بنفس الترتيب!`;
+
+    await bot.sendMessage(chatId, msgIds, { parse_mode: "Markdown" });
+    return;
+  }
+
+  // معالجة الأكواد في الوضع الجماعي (كلان)
+  if (session.mode === "WAIT_BULK_CODES") {
+    // تنظيف الأكواد
+    const codes = text.split('\n')
+      .map(l => l.replace(/Code:/gi, "").replace(/\s/g, "").trim())
+      .filter(l => l.length > 5);
+
+    const players = session.bulkData;
+
+    if (codes.length !== players.length) {
+        return bot.sendMessage(chatId, `⚠️ عدد الأكواد (${codes.length}) لا يطابق عدد اللاعبين (${players.length})!\nأعد إرسال الأكواد بالعدد الصحيح.`);
+    }
+
+    // دمج الأكواد مع اللاعبين في الجلسة للمراجعة
+    players.forEach((p, i) => {
+        p.code = codes[i];
+    });
+
+    session.mode = "WAIT_BULK_CONFIRM"; // وضع الانتظار للتأكيد
+
+    // بناء رسالة المراجعة
+    let reviewMsg = "📝 **مراجعة الطلب (كلان) قبل التنفيذ:**\n\n";
+    players.forEach((p, i) => {
+        reviewMsg += `${i+1}. 👤 ${p.name}\n   🆔 \`${p.id}\`\n   💎 كود: \`${p.code}\`\n\n`;
+    });
+    reviewMsg += "⚠️ سيتم التفعيل بفاصل 3 ثوانٍ بين كل عملية.";
+
+    const confirmKeyboard = {
+        reply_markup: {
+            inline_keyboard: [
+                [{ text: "✅ تأكيد وبدء التفعيل", callback_data: "bulk_confirm" }],
+                [{ text: "❌ إلغاء العملية", callback_data: "bulk_cancel" }]
+            ]
+        }
+    };
+
+    await bot.sendMessage(chatId, reviewMsg, { parse_mode: "Markdown", ...confirmKeyboard });
     return;
   }
 
@@ -668,7 +981,16 @@ bot.on("message", async (msg) => {
           `• ID: ${p.player_id}\n` +
           `• الاسم: ${p.player_name}`;
 
-        await bot.sendMessage(chatId, reply);
+        // زر الحفظ للاعب
+        const saveKeyboard = {
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: "💾 حفظ هذا اللاعب", callback_data: `save_player:${p.player_id}:${p.player_name}` }]
+            ]
+          }
+        };
+
+        await bot.sendMessage(chatId, reply, saveKeyboard);
 
         await logOperation(userId, {
           type: "player",
@@ -791,198 +1113,239 @@ bot.on("message", async (msg) => {
     return;
   }
 
-  // --------- وضع: تفعيل كود (الخطوة الأولى: ID) ----------
+  // --------- المنطقة 1: استلام الآيدي (للشحن الفردي أو الستاك) ----------
   if (session.mode === "WAIT_ACTIVATE_PLAYER_ID") {
     if (!isDigits(text)) {
-      return bot.sendMessage(
-        chatId,
-        "⚠️ ID غير صالح.\nأرسل أرقام فقط بدون مسافات."
-      );
+      return bot.sendMessage(chatId, "⚠️ ID غير صالح، أرسل أرقام فقط.");
     }
 
     const playerId = text;
-    session.temp = { playerId };
-    session.mode = "WAIT_ACTIVATE_CODE";
+    await bot.sendMessage(chatId, "⏳ جاري التحقق من اللاعب...");
 
     try {
-      await bot.sendMessage(chatId, "⏳ يتم الاستعلام عن اللاعب ...");
-
       const data = await getPlayerInfo(playerId);
       if (data.success && data.data && data.data.status === "success") {
         const p = data.data;
-        session.temp.playerName = p.player_name;
+        
+        // حفظ بيانات اللاعب في الجلسة لاستخدامها لاحقاً
+        session.temp = {
+          playerId: p.player_id,
+          playerName: p.player_name
+        };
 
-        const reply =
-          "👤 بيانات اللاعب:\n" +
-          `• ID: ${p.player_id}\n` +
-          `• الاسم: ${p.player_name}\n\n` +
-          "أرسل الآن كود UC الذي تريد تفعيله لهذا اللاعب.";
-        await bot.sendMessage(chatId, reply);
+        // تجهيز الرسالة مع الأزرار
+        const reply = 
+          `👤 **بيانات اللاعب:**\n` +
+          `• الاسم: ${p.player_name}\n` +
+          `• الآيدي: \`${p.player_id}\`\n\n` +
+          `👇 **كيف تريد شحن هذا اللاعب؟**`;
+
+        const optionsKeyboard = {
+          reply_markup: {
+            inline_keyboard: [
+              [
+                { text: "1️⃣ كود واحد", callback_data: "mode_single" },
+                { text: "🔢 مجموعة أكواد (Max 5)", callback_data: "mode_bulk_stack" }
+              ],
+              [{ text: "❌ إلغاء", callback_data: "cancel_act" }]
+            ]
+          }
+        };
+
+        // ننتظر الآن ضغط الزر، لذا نغير الوضع إلى "انتظار الاختيار"
+        session.mode = "WAIT_SELECTION_MODE"; 
+        await bot.sendMessage(chatId, reply, { parse_mode: "Markdown", ...optionsKeyboard });
+
       } else {
-        await bot.sendMessage(
-          chatId,
-          "⚠️ لم يتم العثور على اللاعب، لكن يمكنك إرسال الكود وسنحاول التفعيل على هذا الـ ID."
-        );
-        await bot.sendMessage(
-          chatId,
-          "أرسل الآن كود UC الذي تريد تفعيله لهذا اللاعب."
-        );
+        await bot.sendMessage(chatId, "❌ لم يتم العثور على اللاعب. تأكد من الآيدي.");
       }
     } catch (err) {
-      console.error("خطأ getPlayer داخل التفعيل:", err.message);
-      await bot.sendMessage(
-        chatId,
-        "⚠️ تعذر استعلام اسم اللاعب، لكن يمكنك الاستمرار.\nأرسل الآن كود UC للتفعيل."
-      );
+      console.error(err);
+      await bot.sendMessage(chatId, "❌ خطأ في الاتصال، حاول لاحقاً.");
+      resetSession(chatId); await sendMainMenu(chatId);
     }
-
     return;
   }
 
-  // --------- وضع: تفعيل كود (الخطوة الثانية: الكود) ----------
-  if (session.mode === "WAIT_ACTIVATE_CODE" && session.temp?.playerId) {
-    const ucCode = text;
+  // --------- وضع: تفعيل كود واحد (الخطوة الثانية: الكود) ----------
+  if (session.mode === "WAIT_ACTIVATE_CODE_SINGLE" && session.temp?.playerId) {
+    const ucCode = text.trim();
     const playerId = session.temp.playerId;
     const playerName = session.temp.playerName || "-";
 
     try {
       await bot.sendMessage(chatId, "⏳ يتم تفعيل الكود ...");
-
-      // أولاً: فحص الكود قبل التفعيل
-      const checkData = await checkUcCode(ucCode);
-
-      if (!checkData.success || !checkData.data) {
-        await bot.sendMessage(
-          chatId,
-          "❌ تعذر فحص الكود قبل التفعيل. جرّب لاحقًا."
-        );
-
-        await logOperation(userId, {
-          type: "activate",
-          player_id: playerId,
-          player_name: playerName,
-          code: ucCode,
-          result: "check_error",
-        });
-
-        resetSession(chatId);
-        await sendMainMenu(chatId);
-        return;
-      }
-
-      const cd = checkData.data;
-      console.log("pre-activate raw status =", cd.status);
-
-      const cStatus = normalizeCodeStatus(cd.status);
-      const activatedTo = cd.activated_to || "-";
-      const activatedAtStr = cd.activated_at
-        ? formatDateTimeFromUnix(cd.activated_at)
-        : "-";
-
-      if (cStatus === "activated") {
-        // مفعل مسبقًا — لا نحاول التفعيل مرة أخرى
-        const reply =
-          "⚠️ الكود مفعل مسبقًا\n" +
-          "👤 بيانات اللاعب:\n" +
-          `• ID: ${playerId}\n` +
-          `• الاسم: ${playerName}\n\n` +
-          `• الكود: ${cd.uc_code || ucCode}\n` +
-          `• تم التفعيل على ID: ${activatedTo}\n` +
-          `• وقت التفعيل: ${activatedAtStr}`;
-
+      const res = await activateUcCode(playerId, ucCode);
+      
+      // قراءة الرسالة من المكان الصحيح: data.message
+      const innerMsg = (res.data?.message || "").toLowerCase();
+      
+      // الشرط الدقيق: نجاح فقط إذا status=success والرسالة ليست "already"
+      const isAlreadyUsed = innerMsg.includes("already");
+      const isSuccess = res.data?.status === "success" && !isAlreadyUsed;
+      
+      if (isSuccess) {
+        const reply = `✅ تم تفعيل الكود بنجاح\n👤 ${playerName} (${playerId})\n💎 الكود: ${ucCode}`;
         await bot.sendMessage(chatId, reply);
-
-        await logOperation(userId, {
-          type: "activate",
-          player_id: playerId,
-          player_name: playerName,
-          code: cd.uc_code || ucCode,
-          result: "already_activated",
-        });
-
-        resetSession(chatId);
-        await sendMainMenu(chatId);
-        return;
-      }
-
-      if (cStatus === "failed") {
-        // حالة غير صالحة — لا نحاول التفعيل
-        const reply =
-          "❌ لا يمكن تفعيل هذا الكود\n" +
-          `• الكود: ${cd.uc_code || ucCode}`;
-
-        await bot.sendMessage(chatId, reply);
-
-        await logOperation(userId, {
-          type: "activate",
-          player_id: playerId,
-          player_name: playerName,
-          code: cd.uc_code || ucCode,
-          result: "invalid_before_activate",
-        });
-
-        resetSession(chatId);
-        await sendMainMenu(chatId);
-        return;
-      }
-
-      // هنا الكود غير مفعّل — نحاول التفعيل فعليًا
-      const actData = await activateUcCode(playerId, ucCode);
-
-      if (actData && actData.success) {
-        const reply =
-          "✅ تم تفعيل الكود بنجاح\n" +
-          "👤 بيانات اللاعب:\n" +
-          `• ID: ${playerId}\n` +
-          `• الاسم: ${playerName}\n\n` +
-          `• الكود: ${ucCode}`;
-
-        await bot.sendMessage(chatId, reply);
-
-        await logOperation(userId, {
-          type: "activate",
-          player_id: playerId,
-          player_name: playerName,
-          code: ucCode,
-          result: "success",
-        });
+        await logOperation(userId, { type: "activate", player_id: playerId, player_name: playerName, code: ucCode, result: "success" });
       } else {
-        const reply =
-          "❌ فشل تفعيل الكود\n" +
-          "👤 بيانات اللاعب:\n" +
-          `• ID: ${playerId}\n` +
-          `• الاسم: ${playerName}\n\n` +
-          `• الكود: ${ucCode}`;
-
+        // تحديد السبب بدقة
+        let errorReason = "غير صالح";
+        if (isAlreadyUsed || innerMsg.includes("already") || res.data?.status === "failed") {
+          errorReason = "مفعل سابقاً";
+        }
+        
+        const reply = `❌ فشل التفعيل (${errorReason})\n👤 ${playerName} (${playerId})\n💎 الكود: ${ucCode}`;
         await bot.sendMessage(chatId, reply);
-
-        await logOperation(userId, {
-          type: "activate",
-          player_id: playerId,
-          player_name: playerName,
-          code: ucCode,
-          result: "failed",
-        });
+        await logOperation(userId, { type: "activate", player_id: playerId, player_name: playerName, code: ucCode, result: "failed" });
       }
     } catch (err) {
-      console.error("خطأ أثناء تفعيل الكود (check + activate):", err.message);
-      await bot.sendMessage(
-        chatId,
-        "❌ حدث خطأ أثناء تفعيل الكود. جرّب لاحقًا."
-      );
-
-      await logOperation(userId, {
-        type: "activate",
-        player_id: playerId,
-        player_name: playerName,
-        code: ucCode,
-        result: "error",
-      });
+      console.error("Activate Error:", err.message);
+      await bot.sendMessage(chatId, "❌ حدث خطأ أثناء تفعيل الكود.");
+      await logOperation(userId, { type: "activate", player_id: playerId, code: ucCode, result: "error" });
     } finally {
       resetSession(chatId);
       await sendMainMenu(chatId);
     }
+    return;
+  }
 
+  // ✅ المنطقة 3: تنفيذ التفعيل الجماعي لنفس اللاعب (Stack) - باستخدام New Bulk API
+  if (session.mode === "WAIT_ACTIVATE_CODE_BULK_STACK") {
+      // 1. تنظيف الأكواد
+      const codes = text.split('\n')
+        .map(l => l.replace(/Code:/gi, "").replace(/\s/g, "").trim())
+        .filter(l => l.length > 5);
+
+      if (codes.length > 5) return bot.sendMessage(chatId, "⚠️ الحد الأقصى 5 أكواد.");
+      if (codes.length < 2) return bot.sendMessage(chatId, "⚠️ للشحن الجماعي، أرسل كودين على الأقل.");
+
+      const player = session.temp;
+      await bot.sendMessage(chatId, `🚀 يتم إرسال ${codes.length} أكواد للاعب ${player.playerName} دفعة واحدة...`);
+
+      try {
+          // 2. استدعاء API الشحن الجماعي الجديد
+          const res = await activateBulkUcCodes(player.playerId, codes);
+
+          let report = `📊 **تقرير الشحن لـ ${player.playerName}:**\n\n`;
+          let successCount = 0;
+          let failedCount = 0;
+
+          // 3. تحليل الرد
+          if (res.success && res.data && res.data.results) {
+              const results = res.data.results;
+
+              for (let i = 0; i < results.length; i++) {
+                  const item = results[i];
+                  const code = item.code_activated || codes[i];
+                  const status = item.status; // success / failed
+                  const message = (item.message || "").toLowerCase();
+
+                  let statusText = "";
+                  let logResult = "";
+
+                  if (status === "success" || status === "activated") {
+                      statusText = "✅ تم الشحن";
+                      logResult = "success";
+                      successCount++;
+                  } else {
+                      // التصحيح: فحص دقيق لرسالة "مستخدم سابقاً"
+                      if (message.includes("used") || message.includes("redeemed") || message.includes("already")) {
+                          statusText = "⚠️ مفعل مسبقاً";
+                          logResult = "already_used";
+                      } else if (message.includes("region")) {
+                          statusText = "🌍 خطأ دولة (Region)";
+                          logResult = "region_error";
+                      } else {
+                          statusText = "❌ غير صالح";
+                          logResult = "invalid";
+                      }
+                      failedCount++;
+                  }
+
+                  report += `${i+1}. \`${code}\` : ${statusText}\n`;
+                  
+                  // تسجيل في Firebase
+                  logOperation(userId, { 
+                      type: "activate", 
+                      player_id: player.playerId, 
+                      code: code, 
+                      result: logResult 
+                  });
+              }
+              report += `\n📈 **النتائج:** ${successCount} ناجح / ${failedCount} فشل`;
+
+          } else {
+              report += `❌ حدث خطأ في الطلب: ${res.message || "خطأ غير معروف"}`;
+          }
+
+          await bot.sendMessage(chatId, report, { parse_mode: "Markdown" });
+
+      } catch (err) {
+          console.error(err);
+          await bot.sendMessage(chatId, "❌ خطأ في الاتصال بالسيرفر.");
+      }
+      
+      resetSession(chatId); 
+      await sendMainMenu(chatId);
+      return;
+  }
+
+  // 🎫 زر فتح تذكرة (للمشتركين فقط)
+  if (text === "🎫 فتح تذكرة") {
+    // 🔒 التحقق: هل هو مشترك نشط؟
+    if (!isTrader(userId)) {
+      return bot.sendMessage(chatId, "🛑 **عذراً، خدمة الدعم الفني متاحة للمشتركين النشطين فقط.**\nيرجى تجديد اشتراكك أولاً.", { parse_mode: "Markdown" });
+    }
+
+    session.mode = "WAIT_TICKET_MESSAGE";
+    
+    await bot.sendMessage(chatId, 
+      "✅ **أهلاً بك في الدعم الفني الخاص بالمشتركين**\n\n" +
+      "📝 يرجى كتابة رسالتك أو مشكلتك الآن (في رسالة واحدة).\n" +
+      "📸 يمكنك إرسال صور أيضاً.", 
+      { parse_mode: "Markdown" }
+    );
+    return;
+  }
+
+  // 📨 استقبال رسالة التذكرة من التاجر
+  if (session.mode === "WAIT_TICKET_MESSAGE") {
+    const ADMIN_GROUP_ID = -1001767287162;
+    
+    try {
+      // تجهيز معلومات التاجر للإدارة
+      const traderInfo = traders[String(userId)];
+      const subDate = traderInfo ? formatDateTimeFromUnix(traderInfo.expiresAt) : "غير محدد";
+      
+      const caption = `🎫 **تذكرة جديدة!**\n` +
+                      `👤 الاسم: ${msg.from.first_name}\n` +
+                      `🆔 الآيدي: \`${userId}\`\n` +
+                      `📅 انتهاء الاشتراك: ${subDate}\n` +
+                      `🔻 الرسالة بالأسفل (قم بالرد عليها):`;
+
+      // إرسال بطاقة التعريف للقروب
+      await bot.sendMessage(ADMIN_GROUP_ID, caption, { parse_mode: "Markdown" });
+
+      // تحويل رسالة التاجر (نص أو صورة) للقروب
+      await bot.forwardMessage(ADMIN_GROUP_ID, chatId, msg.message_id);
+      
+      // إشعار التاجر بالنجاح
+      await bot.sendMessage(chatId, "✅ تم إرسال رسالتك للإدارة، سيتم الرد عليك قريباً.");
+      
+    } catch (err) {
+      console.error("خطأ في إرسال التذكرة للقروب:", err.message);
+      
+      // إشعار التاجر بالفشل
+      await bot.sendMessage(chatId, 
+        "⚠️ حدث خطأ في إرسال رسالتك.\n" +
+        "\n" +
+        "يرجى التواصل مباشرة مع المالك: @Sbras_1"
+      );
+    }
+
+    // الخروج من وضع التذكرة
+    resetSession(chatId);
     return;
   }
 
@@ -998,9 +1361,249 @@ bot.on("callback_query", async (query) => {
   const data = query.data || "";
   const chatId = query.message?.chat?.id;
   const userId = query.from?.id;
+  const session = getSession(chatId);
 
   if (!chatId || !userId) return;
 
+  // 📒 معالجة نظام حفظ جهات الاتصال
+  if (data.startsWith("save_player:")) {
+    const [_, pid, ...pnameArr] = data.split(":");
+    const pname = pnameArr.join(":"); // في حال كان الاسم يحتوي على :
+    
+    if (!traders[String(userId)]) {
+      return bot.answerCallbackQuery(query.id, { text: "❌ يجب أن تكون مشتركاً لاستخدام هذه الميزة", show_alert: true });
+    }
+    
+    if (!traders[String(userId)].savedPlayers) {
+      traders[String(userId)].savedPlayers = [];
+    }
+    
+    // التأكد من عدم التكرار
+    const exists = traders[String(userId)].savedPlayers.find(p => p.id == pid);
+    if (exists) {
+      return bot.answerCallbackQuery(query.id, { text: "اللاعب محفوظ مسبقاً!", show_alert: true });
+    }
+
+    traders[String(userId)].savedPlayers.push({ id: pid, name: pname });
+    saveTraders();
+    
+    await bot.answerCallbackQuery(query.id, { text: "✅ تم حفظ اللاعب في قائمتك." });
+    return;
+  }
+
+  // 📒 معالجة عرض قائمة اللاعبين المحفوظين
+  if (data === "my_players") {
+    if (!traders[String(userId)] || !traders[String(userId)].savedPlayers) {
+      return bot.answerCallbackQuery(query.id, { text: "قائمتك فارغة.", show_alert: true });
+    }
+    
+    const list = traders[String(userId)].savedPlayers || [];
+    if (list.length === 0) {
+      return bot.answerCallbackQuery(query.id, { text: "قائمتك فارغة.", show_alert: true });
+    }
+
+    let msgList = "👥 قائمة اللاعبين المحفوظين:\n\n";
+    // عرض الأسماء مع الآيديات لنسخها بسهولة
+    list.forEach((p, i) => {
+      msgList += `${i+1}. ${p.name}\n   \`${p.id}\`\n`; 
+    });
+    
+    await bot.sendMessage(chatId, msgList, { parse_mode: "Markdown" });
+    await bot.answerCallbackQuery(query.id);
+    return;
+  }
+
+  // 🔔 معالجة أزرار إشعارات المالك
+  if (data.startsWith("add_trader:")) {
+    if (userId !== OWNER_ID) {
+      return bot.answerCallbackQuery(query.id, { text: "❌ هذا الزر للمالك فقط", show_alert: true });
+    }
+
+    const targetId = data.split(":")[1];
+    
+    try {
+      // 🔍 جلب معلومات الشخص من Telegram مباشرة
+      let userName = null;
+      let userUsername = null;
+      
+      try {
+        const chatMember = await bot.getChatMember(targetId, targetId);
+        const user = chatMember.user;
+        userName = [user.first_name, user.last_name].filter(Boolean).join(" ") || null;
+        userUsername = user.username ? `@${user.username}` : null;
+      } catch (err) {
+        console.log("تعذر جلب معلومات المستخدم من Telegram، سيتم الحفظ بدونها");
+      }
+
+      const now = Date.now();
+      const durationMs = 30 * 24 * 60 * 60 * 1000; // شهر
+      
+      const existing = traders[String(targetId)];
+      const registeredAt = existing?.registeredAt || now;
+      const newExpiresAt = existing?.expiresAt
+        ? Number(existing.expiresAt) + durationMs
+        : now + durationMs;
+
+      traders[String(targetId)] = {
+        username: userUsername || existing?.username || null,
+        name: userName || existing?.name || null,
+        registeredAt,
+        expiresAt: newExpiresAt,
+        active: true,
+      };
+      saveTraders();
+
+      await bot.editMessageText(
+        query.message.text + "\n\n✅ تمت الإضافة بنجاح!",
+        {
+          chat_id: chatId,
+          message_id: query.message.message_id
+        }
+      );
+
+      await bot.answerCallbackQuery(query.id, { text: "✅ تمت إضافة التاجر بنجاح!" });
+    } catch (err) {
+      console.error("خطأ في إضافة التاجر:", err.message);
+      await bot.answerCallbackQuery(query.id, { text: "❌ حدث خطأ في الإضافة", show_alert: true });
+    }
+    return;
+  }
+
+  if (data === "ignore_notification") {
+    if (userId !== OWNER_ID) {
+      return bot.answerCallbackQuery(query.id, { text: "❌ هذا الزر للمالك فقط", show_alert: true });
+    }
+    
+    try {
+      await bot.deleteMessage(chatId, query.message.message_id);
+      await bot.answerCallbackQuery(query.id, { text: "✅ تم التجاهل" });
+    } catch (err) {
+      await bot.answerCallbackQuery(query.id);
+    }
+    return;
+  }
+
+  // ✅ التعامل مع أزرار التفعيل (فردي/جماعي)
+  if (data === "mode_single") {
+    if (!session.temp || !session.temp.playerName) return bot.answerCallbackQuery(query.id, { text: "انتهت الجلسة" });
+    session.mode = "WAIT_ACTIVATE_CODE_SINGLE";
+    await bot.deleteMessage(chatId, query.message.message_id);
+    await bot.sendMessage(chatId, `✅ اخترت تفعيل كود واحد لـ ${session.temp.playerName}.\n👇 أرسل الكود الآن:`);
+    await bot.answerCallbackQuery(query.id);
+    return;
+  }
+
+  if (data === "mode_bulk_stack") {
+    if (!session.temp || !session.temp.playerName) return bot.answerCallbackQuery(query.id, { text: "انتهت الجلسة" });
+    session.mode = "WAIT_ACTIVATE_CODE_BULK_STACK";
+    await bot.deleteMessage(chatId, query.message.message_id);
+    await bot.sendMessage(chatId, 
+        `✅ اخترت تفعيل مجموعة أكواد لـ ${session.temp.playerName}.\n` +
+        `👇 أرسل الأكواد الآن (كل كود في سطر) - من 2 إلى 5 أكواد.`
+    );
+    await bot.answerCallbackQuery(query.id);
+    return;
+  }
+
+  if (data === "cancel_act") {
+    await bot.deleteMessage(chatId, query.message.message_id);
+    await bot.sendMessage(chatId, "تم الإلغاء.");
+    resetSession(chatId); await sendMainMenu(chatId);
+    await bot.answerCallbackQuery(query.id);
+    return;
+  }
+
+  // ===================== معالجة تأكيد التفعيل الجماعي (كلان) =====================
+  if (data === "bulk_confirm") {
+    if (session.mode !== "WAIT_BULK_CONFIRM" || !session.bulkData) {
+      return bot.answerCallbackQuery(query.id, {
+        text: "⚠️ انتهت صلاحية الجلسة",
+        show_alert: true,
+      });
+    }
+
+    // حذف رسالة التأكيد
+    await bot.deleteMessage(chatId, query.message.message_id);
+    await bot.sendMessage(chatId, "🚀 بدأ التنفيذ (نظام الكلان)... يرجى الانتظار.");
+
+    let finalReport = "📊 **تقرير الكلان النهائي:**\n\n";
+    let successCount = 0;
+
+    // الحلقة الرئيسية للتنفيذ (تتابعي مع تأخير)
+    for (let i = 0; i < session.bulkData.length; i++) {
+      const item = session.bulkData[i];
+
+      try {
+        const res = await activateUcCode(item.id, item.code);
+        
+        // قراءة الرسالة من data.message (المكان الصحيح)
+        const innerMsg = (res.data?.message || "").toLowerCase();
+        const isAlreadyUsed = innerMsg.includes("already");
+        const isSuccess = res.data?.status === "success" && !isAlreadyUsed;
+
+        if (isSuccess) {
+          finalReport += `✅ **${item.name}**: تم بنجاح\n`;
+          successCount++;
+          logOperation(userId, {
+            type: "activate",
+            player_id: item.id,
+            player_name: item.name,
+            code: item.code,
+            result: "bulk_success",
+          });
+        } else {
+          // تحديد السبب بدقة
+          let reason = "غير صالح";
+          if (isAlreadyUsed || res.data?.status === "failed") {
+            reason = "مفعل مسبقاً";
+          }
+          
+          finalReport += `❌ **${item.name}**: ${reason}\n`;
+          logOperation(userId, {
+            type: "activate",
+            player_id: item.id,
+            player_name: item.name,
+            code: item.code,
+            result: "bulk_failed",
+          });
+        }
+      } catch (err) {
+        finalReport += `⚠️ **${item.name}**: خطأ في الاتصال\n`;
+      }
+
+      // فاصل زمني 3 ثواني (ما عدا آخر عملية)
+      if (i < session.bulkData.length - 1) {
+        await bot.sendChatAction(chatId, "typing");
+        await delay(3000);
+      }
+    }
+
+    finalReport += `\n📈 **النتائج:** ${successCount} ناجح / ${
+      session.bulkData.length - successCount
+    } فشل`;
+
+    await bot.sendMessage(chatId, finalReport, { parse_mode: "Markdown" });
+
+    resetSession(chatId);
+    await sendMainMenu(chatId);
+    try {
+      await bot.answerCallbackQuery(query.id);
+    } catch (err) {}
+    return;
+  }
+
+  if (data === "bulk_cancel") {
+    await bot.deleteMessage(chatId, query.message.message_id);
+    await bot.sendMessage(chatId, "❌ تم إلغاء العملية.");
+    resetSession(chatId);
+    await sendMainMenu(chatId);
+    try {
+      await bot.answerCallbackQuery(query.id);
+    } catch (err) {}
+    return;
+  }
+
+  // التعامل مع سجلات Logs
   if (data.startsWith("logs:")) {
     const type = data.split(":")[1]; // player | check | activate
 
@@ -1017,12 +1620,25 @@ bot.on("callback_query", async (query) => {
       return;
     }
 
-    let title = "";
-    if (type === "player") title = "👤 استعلامات اللاعبين:";
-    else if (type === "check") title = "🧪 فحوص الأكواد:";
-    else if (type === "activate") title = "⚡ عمليات التفعيل:";
+    const resultLabels = {
+      activated: "مُفعّل",
+      unactivated: "غير مفعّل",
+      failed: "غير صالح",
+      success: "ناجح",
+      error: "خطأ",
+      already_activated: "مُفعّل مسبقًا",
+      already_used: "مُستخدم",
+      invalid: "غير صالح",
+      invalid_before_activate: "غير صالح",
+      check_error: "خطأ في الفحص",
+      bulk_success: "جماعي ناجح",
+      bulk_failed: "جماعي فاشل"
+    };
 
-    let text = title + "\n\n";
+    let text = "";
+    if (type === "check") text += "🧪 فحوص الأكواد:\n\n";
+    else if (type === "activate") text += "⚡ عمليات التفعيل:\n\n";
+    else if (type === "player") text += "👤 استعلامات اللاعبين:\n\n";
 
     const slice = items.slice(0, 10); // آخر 10 فقط
 
@@ -1031,9 +1647,11 @@ bot.on("callback_query", async (query) => {
       if (type === "player") {
         text += `• ${op.player_name || "-"} (${op.player_id || "-"})\n  في: ${when}\n\n`;
       } else if (type === "check") {
-        text += `• كود: ${op.code || "-"} — (${op.result || "-"})\n  في: ${when}\n\n`;
+        const resultText = resultLabels[op.result] || op.result;
+        text += `• كود: ${op.code || "-"} — (${resultText})\n  في: ${when}\n\n`;
       } else if (type === "activate") {
-        text += `• كود: ${op.code || "-"} — (${op.result || "-"})\n  لاعب: ${op.player_name || "-"} (${op.player_id || "-"})\n  في: ${when}\n\n`;
+        const resultText = resultLabels[op.result] || op.result;
+        text += `• كود: ${op.code || "-"} — (${resultText})\n  لاعب: ${op.player_name || "-"} (${op.player_id || "-"})\n  في: ${when}\n\n`;
       }
     }
 
@@ -1105,8 +1723,6 @@ bot.on("inline_query", async (iq) => {
 
       if (data.success && data.data) {
         const d = data.data;
-        console.log("inline checkCode raw status =", d.status);
-
         const status = normalizeCodeStatus(d.status);
         const amount = d.amount || "-";
 
@@ -1164,12 +1780,48 @@ bot.on("inline_query", async (iq) => {
   await bot.answerInlineQuery(iq.id, results, { cache_time: 0 });
 });
 
-// ===================== التعامل مع أخطاء polling =====================
+// ==================================================
+// 🎫 الرد من الإدارة إلى التاجر (نظام التذاكر)
+// ==================================================
 
-bot.on("polling_error", (err) => {
-  console.error("Polling error:", err.code || err.message);
+const ADMIN_GROUP_ID = -1001767287162;
+
+// الرد من الإدارة (من داخل القروب) إلى التاجر
+bot.on("message", async (msg) => {
+    // التأكد أن الرسالة قادمة من قروب الإدارة وأنها "رد" (Reply)
+    if (msg.chat.id === ADMIN_GROUP_ID && msg.reply_to_message) {
+        
+        // إذا كانت الرسالة الأصلية (التي نرد عليها) محولة من شخص Forwarded
+        if (msg.reply_to_message.forward_from) {
+            const customerId = msg.reply_to_message.forward_from.id;
+            
+            try {
+                // إرسال رد الإدارة للتاجر
+                await bot.sendMessage(customerId, `👨‍💻 **رد من الدعم الفني:**\n\n${msg.text}`, { parse_mode: "Markdown" });
+                
+                // تأكيد للإدارة
+                await bot.sendMessage(ADMIN_GROUP_ID, "✅ تم إيصال الرد للتاجر.");
+            } catch (err) {
+                await bot.sendMessage(ADMIN_GROUP_ID, "❌ فشل الإرسال (ربما قام التاجر بحظر البوت).");
+            }
+        }
+    }
 });
 
-process.on("unhandledRejection", (reason) => {
-  console.error("Unhandled Rejection:", reason);
+// ===================== التعامل مع الأخطاء 🐞 =====================
+
+bot.on("polling_error", (err) => {
+  console.log(err.code); // في الكونسول
+  // لا نرسل كل خطأ بولينج للمالك عشان الإزعاج، لكن الأخطاء الكبيرة نعم
+});
+
+// التعامل مع الأخطاء غير المتوقعة (Crash)
+process.on('uncaughtException', (err) => {
+  console.error('CRASH:', err);
+  reportErrorToAdmin(err.message, "Uncaught Exception");
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Rejection:', reason);
+  // reportErrorToAdmin(reason.toString(), "Unhandled Rejection"); // اختياري
 });
