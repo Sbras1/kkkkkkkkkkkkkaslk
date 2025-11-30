@@ -1114,6 +1114,7 @@ bot.on("message", async (msg) => {
       } else {
         const d = data.data;
         console.log("checkCode raw status =", d.status);
+        console.log("checkCode full response =", JSON.stringify(d, null, 2));
 
         const status = normalizeCodeStatus(d.status);
         const amount = d.amount || "-";
