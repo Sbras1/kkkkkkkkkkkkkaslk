@@ -2039,151 +2039,265 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // ==================================================
-// 🌐 لوحة تحكم الويب (Web Dashboard)
-// المكان: انسخ هذا الكود وضعه في نهاية ملف index.js
+// 🌐 لوحة تحكم الويب (Web Dashboard Pro)
+// المميزات: قائمة جانبية + إضافة سريعة + سجلات حية
 // ==================================================
 
 const express = require('express');
 const app = express();
-const PORT = process.env.PORT || 3000; // رندر يعطينا المنفذ تلقائياً
+const PORT = process.env.PORT || 3000;
+const DASHBOARD_PASS = "admin123"; // 🔐 كلمة المرور
 
-// 🔐 كلمة المرور للدخول (غيرها براحتك)
-const DASHBOARD_PASS = "admin123"; 
+// ضروري لاستقبال البيانات من الصفحة
+app.use(express.json()); 
 
+// 1️⃣ واجهة اللوحة (HTML + CSS + JS)
 app.get('/dashboard', async (req, res) => {
-    // 1. التحقق
     const pass = req.query.pass;
-    if (pass !== DASHBOARD_PASS) return res.status(403).send("⛔ كلمة المرور خطأ");
+    if (pass !== DASHBOARD_PASS) return res.status(403).send("⛔ كلمة المرور خاطئة");
 
-    // 2. جلب البيانات
     const allTraders = await getAllTraders() || {};
     const allKeys = await getAllKeys() || [];
-    const globalLogs = await getGlobalLogs(); // 🔥 جلب السجلات
+    const globalLogs = await getGlobalLogs();
 
-    // 3. الإحصائيات
     const tradersArr = Object.entries(allTraders);
     const totalTraders = tradersArr.length;
     const activeTraders = tradersArr.filter(([_, t]) => isTraderActive(t)).length;
-    
-    // 4. تصميم الصفحة (تم إضافة جدول السجلات في الأسفل)
+    const expiredTraders = totalTraders - activeTraders;
+
+    // تحويل البيانات لـ JSON لكي تستخدمها الجافاسكريبت في الصفحة
+    const logsJson = JSON.stringify(globalLogs);
+    const tradersJson = JSON.stringify(tradersArr);
+
     let html = `
     <!DOCTYPE html>
     <html dir="rtl" lang="ar">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>غرفة العمليات 🚀</title>
+        <title>لوحة التحكم 🚀</title>
         <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700&display=swap" rel="stylesheet">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
         <style>
-            body { font-family: 'Tajawal', sans-serif; background-color: #f0f2f5; margin: 0; padding: 20px; color: #333; }
-            .container { max-width: 1200px; margin: 0 auto; }
-            h1, h2 { color: #1a73e8; }
+            :root { --primary: #2c3e50; --accent: #3498db; --bg: #f4f6f9; --sidebar-w: 250px; }
+            body { font-family: 'Tajawal', sans-serif; background: var(--bg); margin: 0; display: flex; height: 100vh; overflow: hidden; }
             
+            /* القائمة الجانبية */
+            .sidebar { width: var(--sidebar-w); background: var(--primary); color: white; padding: 20px; display: flex; flex-direction: column; }
+            .sidebar h2 { text-align: center; margin-bottom: 40px; border-bottom: 1px solid #34495e; padding-bottom: 10px; }
+            .menu-item { padding: 15px; cursor: pointer; border-radius: 8px; margin-bottom: 5px; transition: 0.3s; display: flex; align-items: center; gap: 10px; }
+            .menu-item:hover, .menu-item.active { background: var(--accent); }
+            .menu-item i { width: 20px; }
+
+            /* المحتوى الرئيسي */
+            .main { flex: 1; padding: 30px; overflow-y: auto; }
+            .page { display: none; animation: fadeIn 0.3s; }
+            .page.active { display: block; }
+            @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
             /* البطاقات */
             .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }
-            .card { background: white; padding: 20px; border-radius: 12px; text-align: center; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
-            .card .num { font-size: 32px; font-weight: bold; margin-top: 10px; }
-            
+            .card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); text-align: center; }
+            .card h3 { margin: 0; font-size: 14px; color: #7f8c8d; }
+            .card .num { font-size: 28px; font-weight: bold; margin-top: 10px; color: var(--primary); }
+
             /* الجداول */
-            .section { background: white; border-radius: 12px; padding: 20px; margin-bottom: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); overflow-x: auto; }
-            table { width: 100%; border-collapse: collapse; white-space: nowrap; }
-            th, td { padding: 12px; text-align: right; border-bottom: 1px solid #eee; }
-            th { background-color: #f8f9fa; color: #555; }
+            .table-box { background: white; border-radius: 10px; padding: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+            .header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+            .btn-add { background: #27ae60; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-family: inherit; display: flex; align-items: center; gap: 5px; }
+            .btn-add:hover { background: #219150; }
             
-            /* ألوان الحالات */
+            table { width: 100%; border-collapse: collapse; }
+            th, td { padding: 12px; text-align: right; border-bottom: 1px solid #eee; }
+            th { background: #f8f9fa; color: #555; }
+            
+            /* البادجات */
             .badge { padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
-            .success { background: #d1e7dd; color: #0f5132; }
-            .failed { background: #f8d7da; color: #842029; }
-            .warning { background: #fff3cd; color: #664d03; }
-            .info { background: #cff4fc; color: #055160; }
+            .active { background: #d4edda; color: #155724; }
+            .expired { background: #f8d7da; color: #721c24; }
+
+            /* النافذة المنبثقة (Modal) */
+            .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); justify-content: center; align-items: center; z-index: 1000; }
+            .modal-content { background: white; padding: 25px; border-radius: 10px; width: 400px; text-align: center; }
+            .form-group { margin-bottom: 15px; text-align: right; }
+            .form-group label { display: block; margin-bottom: 5px; font-weight: bold; }
+            .form-group input { width: 95%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; font-family: inherit; }
+            .modal-actions { display: flex; gap: 10px; justify-content: center; margin-top: 20px; }
+            .btn-save { background: var(--accent); color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; }
+            .btn-cancel { background: #95a5a6; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; }
         </style>
     </head>
     <body>
-        <div class="container">
-            <center><h1>🤖 لوحة القيادة</h1></center>
 
-            <div class="stats-grid">
-                <div class="card"><h3>المشتركين</h3><div class="num" style="color:#1a73e8">${totalTraders}</div></div>
-                <div class="card"><h3>النشطين</h3><div class="num" style="color:#00c851">${activeTraders}</div></div>
-                <div class="card"><h3>المفاتيح</h3><div class="num" style="color:#ffbb33">${allKeys.length}</div></div>
-                <div class="card"><h3>عمليات مسجلة</h3><div class="num" style="color:#ff4444">${globalLogs.length}</div></div>
+        <div class="sidebar">
+            <h2>🤖 Admin Panel</h2>
+            <div class="menu-item active" onclick="showPage('home', this)">
+                <i class="fas fa-users"></i> المشتركين والإحصائيات
+            </div>
+            <div class="menu-item" onclick="showPage('logs', this)">
+                <i class="fas fa-history"></i> سجل العمليات الحي
+            </div>
+        </div>
+
+        <div class="main">
+            
+            <div id="home" class="page active">
+                <div class="stats-grid">
+                    <div class="card"><h3>إجمالي المشتركين</h3><div class="num">${totalTraders}</div></div>
+                    <div class="card"><h3>النشطين</h3><div class="num" style="color:#27ae60">${activeTraders}</div></div>
+                    <div class="card"><h3>المنتهين</h3><div class="num" style="color:#c0392b">${expiredTraders}</div></div>
+                    <div class="card"><h3>المفاتيح</h3><div class="num" style="color:#f39c12">${allKeys.length}</div></div>
+                </div>
+
+                <div class="table-box">
+                    <div class="header-row">
+                        <h2>👥 قائمة التجار</h2>
+                        <button class="btn-add" onclick="openModal()"><i class="fas fa-plus"></i> إضافة تاجر جديد</button>
+                    </div>
+                    <table>
+                        <thead><tr><th>الآيدي</th><th>الاسم</th><th>الحالة</th><th>الانتهاء</th></tr></thead>
+                        <tbody>
+                            ${tradersArr.map(([id, t]) => `
+                                <tr>
+                                    <td>${id}</td>
+                                    <td>${t.name || 'غير معروف'}</td>
+                                    <td><span class="badge ${isTraderActive(t) ? 'active' : 'expired'}">${isTraderActive(t) ? 'نشط' : 'منتهي'}</span></td>
+                                    <td dir="ltr">${t.expiresAt ? new Date(t.expiresAt).toLocaleDateString('en-GB') : '-'}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
             </div>
 
-            <div class="section">
-                <h2>📡 آخر العمليات الحية (Log)</h2>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>الوقت</th>
-                            <th>التاجر</th>
-                            <th>نوع العملية</th>
-                            <th>الكود / الآيدي</th>
-                            <th>النتيجة</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${globalLogs.map(log => {
-                            const date = new Date(log.time).toLocaleTimeString('en-US', {hour12:false, timeZone:'Asia/Riyadh'});
-                            
-                            // اسم التاجر من الذاكرة
-                            const traderName = allTraders[log.traderId]?.name || log.traderId;
-                            
-                            // تنسيق نوع العملية
-                            let typeAr = log.type;
-                            if(log.type === 'activate') typeAr = '⚡ تفعيل';
-                            if(log.type === 'check') typeAr = '🧪 فحص';
-                            if(log.type === 'player') typeAr = '🎮 استعلام';
-
-                            // تنسيق الحالة واللون
-                            let statusClass = 'info';
-                            let statusText = log.result;
-                            
-                            if(log.result === 'success' || log.result === 'activated') { statusClass = 'success'; statusText = 'ناجح'; }
-                            else if(log.result === 'failed' || log.result === 'invalid') { statusClass = 'failed'; statusText = 'فشل'; }
-                            else if(log.result === 'already_used') { statusClass = 'warning'; statusText = 'مستخدم'; }
-                            else if(log.result === 'unactivated') { statusClass = 'info'; statusText = 'جديد'; }
-
-                            return `
-                            <tr>
-                                <td dir="ltr">${date}</td>
-                                <td><b>${traderName}</b></td>
-                                <td>${typeAr}</td>
-                                <td style="font-family:monospace">${log.code || log.player_id || '-'}</td>
-                                <td><span class="badge ${statusClass}">${statusText}</span></td>
-                            </tr>
-                            `;
-                        }).join('')}
-                    </tbody>
-                </table>
-            </div>
-
-            <div class="section">
-                <h2>👥 المشتركين</h2>
-                <table>
-                    <thead><tr><th>الاسم</th><th>الآيدي</th><th>الحالة</th><th>الانتهاء</th></tr></thead>
-                    <tbody>
-                        ${tradersArr.map(([id, t]) => `
-                            <tr>
-                                <td>${t.name || 'بدون اسم'}</td>
-                                <td>${id}</td>
-                                <td>${isTraderActive(t) ? '✅' : '❌'}</td>
-                                <td dir="ltr">${t.expiresAt ? new Date(t.expiresAt).toLocaleDateString('en-GB') : '-'}</td>
-                            </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
+            <div id="logs" class="page">
+                <div class="table-box">
+                    <h2>📡 سجل العمليات المباشر</h2>
+                    <table>
+                        <thead><tr><th>الوقت</th><th>التاجر</th><th>العملية</th><th>التفاصيل</th><th>النتيجة</th></tr></thead>
+                        <tbody>
+                            ${globalLogs.map(log => `
+                                <tr>
+                                    <td dir="ltr">${new Date(log.time).toLocaleTimeString('en-US', {hour12:false})}</td>
+                                    <td>${allTraders[log.traderId]?.name || log.traderId}</td>
+                                    <td>${log.type}</td>
+                                    <td style="font-family:monospace">${log.code || log.player_id || '-'}</td>
+                                    <td>${log.result}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
             </div>
 
         </div>
-        <script>setTimeout(() => window.location.reload(), 30000);</script>
+
+        <div id="modal" class="modal">
+            <div class="modal-content">
+                <h3>➕ إضافة تاجر جديد</h3>
+                <div class="form-group">
+                    <label>آيدي تليجرام (ID)</label>
+                    <input type="number" id="newId" placeholder="مثال: 123456789">
+                </div>
+                <div class="modal-actions">
+                    <button class="btn-save" onclick="addTrader()">حفظ وتفعيل</button>
+                    <button class="btn-cancel" onclick="closeModal()">إلغاء</button>
+                </div>
+            </div>
+        </div>
+
+        <script>
+            // التبديل بين الصفحات
+            function showPage(pageId, btn) {
+                document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+                document.getElementById(pageId).classList.add('active');
+                document.querySelectorAll('.menu-item').forEach(m => m.classList.remove('active'));
+                btn.classList.add('active');
+            }
+
+            // التحكم بالنافذة المنبثقة
+            function openModal() { document.getElementById('modal').style.display = 'flex'; }
+            function closeModal() { document.getElementById('modal').style.display = 'none'; }
+
+            // دالة إضافة التاجر (API Call)
+            async function addTrader() {
+                const id = document.getElementById('newId').value;
+                if(!id) return alert("يرجى كتابة الآيدي!");
+                
+                const btn = document.querySelector('.btn-save');
+                btn.innerText = "جاري الإضافة...";
+                
+                try {
+                    const res = await fetch('/api/add_trader', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ id: id, pass: "${pass}" })
+                    });
+                    const data = await res.json();
+                    
+                    if(data.success) {
+                        alert("✅ تم إضافة التاجر: " + data.name);
+                        location.reload();
+                    } else {
+                        alert("❌ خطأ: " + data.error);
+                    }
+                } catch(e) {
+                    alert("❌ خطأ في الاتصال");
+                }
+                btn.innerText = "حفظ وتفعيل";
+            }
+        </script>
     </body>
     </html>
     `;
-    
     res.send(html);
 });
 
-// تشغيل السيرفر
+// 2️⃣ نقطة API لإضافة التاجر من المتصفح
+app.post('/api/add_trader', async (req, res) => {
+    const { id, pass } = req.body;
+
+    // حماية الـ API
+    if (pass !== DASHBOARD_PASS) return res.json({ success: false, error: "Auth Failed" });
+
+    try {
+        // محاولة جلب اسم المستخدم من تليجرام تلقائياً
+        let name = "تاجر جديد";
+        let username = null;
+        
+        try {
+            const chat = await bot.getChat(id);
+            name = [chat.first_name, chat.last_name].filter(Boolean).join(" ") || "بدون اسم";
+            username = chat.username ? `@${chat.username}` : null;
+        } catch (e) {
+            console.log("⚠️ تعذر جلب الاسم من تليجرام (ربما لم يبدأ البوت):", e.message);
+        }
+
+        const now = Date.now();
+        const durationMs = 30 * 24 * 60 * 60 * 1000; // 30 يوم افتراضياً
+
+        const newTraderData = {
+            name,
+            username,
+            active: true,
+            registeredAt: now,
+            expiresAt: now + durationMs
+        };
+
+        // الحفظ في Firebase والذاكرة
+        traders[String(id)] = newTraderData;
+        await saveTraderToFirebase(String(id), newTraderData);
+
+        // إشعار للمالك
+        if (OWNER_ID) bot.sendMessage(OWNER_ID, `👨‍💻 **تم إضافة تاجر من اللوحة:**\n👤 ${name} (\`${id}\`)`, {parse_mode:"Markdown"});
+
+        res.json({ success: true, name });
+
+    } catch (e) {
+        res.json({ success: false, error: e.message });
+    }
+});
+
 app.listen(PORT, () => {
-    console.log(`🌐 Dashboard is running on port ${PORT}`);
+    console.log(`🌐 Dashboard running on port ${PORT}`);
 });
