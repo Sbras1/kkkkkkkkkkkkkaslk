@@ -2048,6 +2048,55 @@ const PORT = process.env.PORT || 3000; // رندر يعطينا المنفذ ت�
 // 🔐 كلمة المرور للدخول (غيرها براحتك)
 const DASHBOARD_PASS = "admin123"; 
 
+// الصفحة الرئيسية (للتأكد من عمل السيرفر)
+app.get('/', (req, res) => {
+    res.send(`
+        <!DOCTYPE html>
+        <html dir="rtl" lang="ar">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>البوت يعمل ✅</title>
+            <style>
+                body { 
+                    font-family: sans-serif; 
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    height: 100vh;
+                    margin: 0;
+                    color: white;
+                }
+                .container { 
+                    text-align: center; 
+                    background: rgba(255,255,255,0.1);
+                    padding: 40px;
+                    border-radius: 20px;
+                    backdrop-filter: blur(10px);
+                }
+                h1 { font-size: 3em; margin: 0; }
+                p { font-size: 1.2em; margin: 20px 0; }
+                .status { 
+                    display: inline-block;
+                    background: #27ae60;
+                    padding: 10px 20px;
+                    border-radius: 25px;
+                    margin-top: 20px;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🤖 البوت يعمل بنجاح</h1>
+                <p>PUBG UC Bot is Running</p>
+                <div class="status">✅ Online</div>
+            </div>
+        </body>
+        </html>
+    `);
+});
+
 app.get('/dashboard', async (req, res) => {
     // 1. التأكد من كلمة المرور
     const pass = req.query.pass;
