@@ -163,6 +163,156 @@ async function streamLog(user, action, detail, status) {
   }
 }
 
+// ==================================================
+// 🌐 Express Web Server (يجب أن يكون قبل البوت)
+// ==================================================
+
+const express = require('express');
+const app = express();
+const PORT = process.env.PORT || 3000;
+const DASHBOARD_PASS = "admin123";
+
+// الصفحة الرئيسية
+app.get('/', (req, res) => {
+    res.send(`
+        <!DOCTYPE html>
+        <html dir="rtl" lang="ar">
+        <head>
+            <meta charset="UTF-8">
+            <title>البوت يعمل ✅</title>
+            <style>
+                body { 
+                    font-family: sans-serif; 
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    height: 100vh;
+                    margin: 0;
+                    color: white;
+                }
+                .container { 
+                    text-align: center; 
+                    background: rgba(255,255,255,0.1);
+                    padding: 40px;
+                    border-radius: 20px;
+                    backdrop-filter: blur(10px);
+                }
+                h1 { font-size: 3em; margin: 0; }
+                p { font-size: 1.2em; margin: 20px 0; }
+                .status { 
+                    display: inline-block;
+                    background: #27ae60;
+                    padding: 10px 20px;
+                    border-radius: 25px;
+                    margin-top: 20px;
+                }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🤖 البوت يعمل بنجاح</h1>
+                <p>PUBG UC Bot is Running</p>
+                <div class="status">✅ Online</div>
+            </div>
+        </body>
+        </html>
+    `);
+});
+
+// لوحة التحكم
+app.get('/dashboard', async (req, res) => {
+    const pass = req.query.pass;
+    if (pass !== DASHBOARD_PASS) {
+        return res.status(403).send("<h1 style='color:red; text-align:center; margin-top:50px;'>⛔ عذراً، كلمة المرور خاطئة!</h1>");
+    }
+
+    const allTraders = await getAllTraders() || {};
+    const allKeys = await getAllKeys() || [];
+    
+    const tradersArr = Object.entries(allTraders);
+    const totalTraders = tradersArr.length;
+    const activeTraders = tradersArr.filter(([_, t]) => isTraderActive(t)).length;
+    const expiredTraders = totalTraders - activeTraders;
+
+    let html = `
+    <!DOCTYPE html>
+    <html dir="rtl" lang="ar">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>لوحة المالك 🤖</title>
+        <style>
+            body { font-family: sans-serif; background: #f4f6f8; padding: 20px; margin: 0; }
+            .header { text-align: center; margin-bottom: 30px; }
+            .header h1 { color: #2c3e50; }
+            
+            .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 30px; }
+            .card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); text-align: center; }
+            .card h3 { margin: 0 0 10px; color: #7f8c8d; font-size: 14px; }
+            .card .num { font-size: 28px; font-weight: bold; color: #2c3e50; }
+            .green .num { color: #27ae60; }
+            .red .num { color: #c0392b; }
+
+            .table-box { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); overflow-x: auto; }
+            table { width: 100%; border-collapse: collapse; min-width: 600px; }
+            th, td { padding: 12px; text-align: right; border-bottom: 1px solid #eee; }
+            th { background: #ecf0f1; color: #2c3e50; }
+            .status-active { background: #d4edda; color: #155724; padding: 3px 8px; border-radius: 5px; font-size: 12px; }
+            .status-expired { background: #f8d7da; color: #721c24; padding: 3px 8px; border-radius: 5px; font-size: 12px; }
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1>🤖 لوحة تحكم البوت</h1>
+        </div>
+
+        <div class="cards">
+            <div class="card"><h3>إجمالي المشتركين</h3><div class="num">${totalTraders}</div></div>
+            <div class="card green"><h3>مشترك نشط</h3><div class="num">${activeTraders}</div></div>
+            <div class="card red"><h3>اشتراك منتهي</h3><div class="num">${expiredTraders}</div></div>
+            <div class="card"><h3>المفاتيح المتوفرة</h3><div class="num">${allKeys.length}</div></div>
+        </div>
+
+        <div class="table-box">
+            <h3>👥 قائمة التجار</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>الآيدي</th>
+                        <th>الاسم</th>
+                        <th>الحالة</th>
+                        <th>تاريخ الانتهاء</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${tradersArr.map(([id, t]) => {
+                        const active = isTraderActive(t);
+                        const date = t.expiresAt ? new Date(t.expiresAt).toLocaleDateString('ar-SA') : '-';
+                        return `
+                        <tr>
+                            <td>${id}</td>
+                            <td>${t.name || 'غير معروف'}</td>
+                            <td><span class="${active ? 'status-active' : 'status-expired'}">${active ? 'نشط' : 'منتهي'}</span></td>
+                            <td dir="ltr">${date}</td>
+                        </tr>
+                        `;
+                    }).join('')}
+                </tbody>
+            </table>
+        </div>
+    </body>
+    </html>
+    `;
+
+    res.send(html);
+});
+
+// تشغيل السيرفر
+app.listen(PORT, () => {
+    console.log(`🌐 Dashboard is running on port ${PORT}`);
+});
+
 // ===================== إنشاء البوت =====================
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
@@ -2035,162 +2185,4 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Rejection:', reason);
   // reportErrorToAdmin(reason.toString(), "Unhandled Rejection"); // اختياري
-});
-
-// ==================================================
-// 🌐 لوحة تحكم الويب (Web Dashboard)
-// ==================================================
-
-const express = require('express');
-const app = express();
-const PORT = process.env.PORT || 3000; // رندر يعطينا المنفذ تلقائياً
-
-// 🔐 كلمة المرور للدخول (غيرها براحتك)
-const DASHBOARD_PASS = "admin123"; 
-
-// الصفحة الرئيسية (للتأكد من عمل السيرفر)
-app.get('/', (req, res) => {
-    res.send(`
-        <!DOCTYPE html>
-        <html dir="rtl" lang="ar">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>البوت يعمل ✅</title>
-            <style>
-                body { 
-                    font-family: sans-serif; 
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                    display: flex;
-                    justify-content: center;
-                    align-items: center;
-                    height: 100vh;
-                    margin: 0;
-                    color: white;
-                }
-                .container { 
-                    text-align: center; 
-                    background: rgba(255,255,255,0.1);
-                    padding: 40px;
-                    border-radius: 20px;
-                    backdrop-filter: blur(10px);
-                }
-                h1 { font-size: 3em; margin: 0; }
-                p { font-size: 1.2em; margin: 20px 0; }
-                .status { 
-                    display: inline-block;
-                    background: #27ae60;
-                    padding: 10px 20px;
-                    border-radius: 25px;
-                    margin-top: 20px;
-                }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>🤖 البوت يعمل بنجاح</h1>
-                <p>PUBG UC Bot is Running</p>
-                <div class="status">✅ Online</div>
-            </div>
-        </body>
-        </html>
-    `);
-});
-
-app.get('/dashboard', async (req, res) => {
-    // 1. التأكد من كلمة المرور
-    const pass = req.query.pass;
-    if (pass !== DASHBOARD_PASS) {
-        return res.status(403).send("<h1 style='color:red; text-align:center; margin-top:50px;'>⛔ عذراً، كلمة المرور خاطئة!</h1>");
-    }
-
-    // 2. جلب البيانات من Firebase (نستخدم الدوال الموجودة في كودك)
-    const allTraders = await getAllTraders() || {};
-    const allKeys = await getAllKeys() || [];
-    
-    // 3. تجهيز الأرقام للإحصائيات
-    const tradersArr = Object.entries(allTraders);
-    const totalTraders = tradersArr.length;
-    const activeTraders = tradersArr.filter(([_, t]) => isTraderActive(t)).length;
-    const expiredTraders = totalTraders - activeTraders;
-
-    // 4. تصميم الصفحة (HTML)
-    let html = `
-    <!DOCTYPE html>
-    <html dir="rtl" lang="ar">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>لوحة المالك 🤖</title>
-        <style>
-            body { font-family: sans-serif; background: #f4f6f8; padding: 20px; margin: 0; }
-            .header { text-align: center; margin-bottom: 30px; }
-            .header h1 { color: #2c3e50; }
-            
-            /* البطاقات */
-            .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 30px; }
-            .card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); text-align: center; }
-            .card h3 { margin: 0 0 10px; color: #7f8c8d; font-size: 14px; }
-            .card .num { font-size: 28px; font-weight: bold; color: #2c3e50; }
-            .green .num { color: #27ae60; }
-            .red .num { color: #c0392b; }
-
-            /* الجدول */
-            .table-box { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); overflow-x: auto; }
-            table { width: 100%; border-collapse: collapse; min-width: 600px; }
-            th, td { padding: 12px; text-align: right; border-bottom: 1px solid #eee; }
-            th { background: #ecf0f1; color: #2c3e50; }
-            .status-active { background: #d4edda; color: #155724; padding: 3px 8px; border-radius: 5px; font-size: 12px; }
-            .status-expired { background: #f8d7da; color: #721c24; padding: 3px 8px; border-radius: 5px; font-size: 12px; }
-        </style>
-    </head>
-    <body>
-        <div class="header">
-            <h1>🤖 لوحة تحكم البوت</h1>
-        </div>
-
-        <div class="cards">
-            <div class="card"><h3>إجمالي المشتركين</h3><div class="num">${totalTraders}</div></div>
-            <div class="card green"><h3>مشترك نشط</h3><div class="num">${activeTraders}</div></div>
-            <div class="card red"><h3>اشتراك منتهي</h3><div class="num">${expiredTraders}</div></div>
-            <div class="card"><h3>المفاتيح المتوفرة</h3><div class="num">${allKeys.length}</div></div>
-        </div>
-
-        <div class="table-box">
-            <h3>👥 قائمة التجار</h3>
-            <table>
-                <thead>
-                    <tr>
-                        <th>الآيدي</th>
-                        <th>الاسم</th>
-                        <th>الحالة</th>
-                        <th>تاريخ الانتهاء</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${tradersArr.map(([id, t]) => {
-                        const active = isTraderActive(t);
-                        const date = t.expiresAt ? new Date(t.expiresAt).toLocaleDateString('ar-SA') : '-';
-                        return `
-                        <tr>
-                            <td>${id}</td>
-                            <td>${t.name || 'غير معروف'}</td>
-                            <td><span class="${active ? 'status-active' : 'status-expired'}">${active ? 'نشط' : 'منتهي'}</span></td>
-                            <td dir="ltr">${date}</td>
-                        </tr>
-                        `;
-                    }).join('')}
-                </tbody>
-            </table>
-        </div>
-    </body>
-    </html>
-    `;
-
-    res.send(html);
-});
-
-// تشغيل السيرفر
-app.listen(PORT, () => {
-    console.log(`🌐 Dashboard is running on port ${PORT}`);
 });
