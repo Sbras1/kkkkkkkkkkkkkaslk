@@ -284,6 +284,41 @@ async function deleteKeyFromFirebase(keyString) {
   }
 }
 
+// ===================== (جديد) دالة جلب السجلات العالمية للوحة التحكم =====================
+
+// دالة لجلب آخر 100 عملية من كل التجار وعرضها في اللوحة
+async function getGlobalLogs() {
+  const database = initFirebase();
+  if (!database) {
+    console.warn("⚠️ getGlobalLogs: Firebase غير متوفر.");
+    return [];
+  }
+  
+  try {
+    const snapshot = await database.ref('logs').once('value');
+    const data = snapshot.val();
+    if (!data) return [];
+
+    let allLogs = [];
+
+    // تجميع السجلات من كل المستخدمين في قائمة واحدة
+    Object.keys(data).forEach(userId => {
+      const userLogs = data[userId];
+      Object.values(userLogs).forEach(log => {
+        // نضيف الآيدي للسجل لنعرف من صاحبه
+        log.traderId = userId; 
+        allLogs.push(log);
+      });
+    });
+
+    // ترتيب حسب الوقت (الأحدث في الأعلى) وأخذ آخر 100 عملية فقط
+    return allLogs.sort((a, b) => b.time - a.time).slice(0, 100);
+  } catch (err) {
+    console.error("⚠️ getGlobalLogs: خطأ أثناء القراءة:", err.message);
+    return [];
+  }
+}
+
 module.exports = {
   logOperation,
   getTraderLogs,
@@ -292,5 +327,6 @@ module.exports = {
   deleteTraderFromFirebase,
   getAllKeys,
   saveKeyToFirebase,
-  deleteKeyFromFirebase
+  deleteKeyFromFirebase,
+  getGlobalLogs
 };

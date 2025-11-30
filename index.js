@@ -21,7 +21,8 @@ const {
   deleteTraderFromFirebase,
   getAllKeys,
   saveKeyToFirebase,
-  deleteKeyFromFirebase
+  deleteKeyFromFirebase,
+  getGlobalLogs
 } = require("./firebaseLogs");
 
 // تعطيل تحذير DeprecationWarning للملفات
@@ -2050,95 +2051,135 @@ const PORT = process.env.PORT || 3000; // رندر يعطينا المنفذ ت�
 const DASHBOARD_PASS = "admin123"; 
 
 app.get('/dashboard', async (req, res) => {
-    // 1. التأكد من كلمة المرور
+    // 1. التحقق
     const pass = req.query.pass;
-    if (pass !== DASHBOARD_PASS) {
-        return res.status(403).send("<h1 style='color:red; text-align:center; margin-top:50px;'>⛔ عذراً، كلمة المرور خاطئة!</h1>");
-    }
+    if (pass !== DASHBOARD_PASS) return res.status(403).send("⛔ كلمة المرور خطأ");
 
-    // 2. جلب البيانات من Firebase (نستخدم الدوال الموجودة في كودك)
+    // 2. جلب البيانات
     const allTraders = await getAllTraders() || {};
     const allKeys = await getAllKeys() || [];
-    
-    // 3. تجهيز الأرقام للإحصائيات
+    const globalLogs = await getGlobalLogs(); // 🔥 جلب السجلات
+
+    // 3. الإحصائيات
     const tradersArr = Object.entries(allTraders);
     const totalTraders = tradersArr.length;
     const activeTraders = tradersArr.filter(([_, t]) => isTraderActive(t)).length;
-    const expiredTraders = totalTraders - activeTraders;
-
-    // 4. تصميم الصفحة (HTML)
+    
+    // 4. تصميم الصفحة (تم إضافة جدول السجلات في الأسفل)
     let html = `
     <!DOCTYPE html>
     <html dir="rtl" lang="ar">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>لوحة المالك 🤖</title>
+        <title>غرفة العمليات 🚀</title>
+        <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700&display=swap" rel="stylesheet">
         <style>
-            body { font-family: sans-serif; background: #f4f6f8; padding: 20px; margin: 0; }
-            .header { text-align: center; margin-bottom: 30px; }
-            .header h1 { color: #2c3e50; }
+            body { font-family: 'Tajawal', sans-serif; background-color: #f0f2f5; margin: 0; padding: 20px; color: #333; }
+            .container { max-width: 1200px; margin: 0 auto; }
+            h1, h2 { color: #1a73e8; }
             
             /* البطاقات */
-            .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 30px; }
-            .card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); text-align: center; }
-            .card h3 { margin: 0 0 10px; color: #7f8c8d; font-size: 14px; }
-            .card .num { font-size: 28px; font-weight: bold; color: #2c3e50; }
-            .green .num { color: #27ae60; }
-            .red .num { color: #c0392b; }
-
-            /* الجدول */
-            .table-box { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); overflow-x: auto; }
-            table { width: 100%; border-collapse: collapse; min-width: 600px; }
+            .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }
+            .card { background: white; padding: 20px; border-radius: 12px; text-align: center; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
+            .card .num { font-size: 32px; font-weight: bold; margin-top: 10px; }
+            
+            /* الجداول */
+            .section { background: white; border-radius: 12px; padding: 20px; margin-bottom: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); overflow-x: auto; }
+            table { width: 100%; border-collapse: collapse; white-space: nowrap; }
             th, td { padding: 12px; text-align: right; border-bottom: 1px solid #eee; }
-            th { background: #ecf0f1; color: #2c3e50; }
-            .status-active { background: #d4edda; color: #155724; padding: 3px 8px; border-radius: 5px; font-size: 12px; }
-            .status-expired { background: #f8d7da; color: #721c24; padding: 3px 8px; border-radius: 5px; font-size: 12px; }
+            th { background-color: #f8f9fa; color: #555; }
+            
+            /* ألوان الحالات */
+            .badge { padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
+            .success { background: #d1e7dd; color: #0f5132; }
+            .failed { background: #f8d7da; color: #842029; }
+            .warning { background: #fff3cd; color: #664d03; }
+            .info { background: #cff4fc; color: #055160; }
         </style>
     </head>
     <body>
-        <div class="header">
-            <h1>🤖 لوحة تحكم البوت</h1>
-        </div>
+        <div class="container">
+            <center><h1>🤖 لوحة القيادة</h1></center>
 
-        <div class="cards">
-            <div class="card"><h3>إجمالي المشتركين</h3><div class="num">${totalTraders}</div></div>
-            <div class="card green"><h3>مشترك نشط</h3><div class="num">${activeTraders}</div></div>
-            <div class="card red"><h3>اشتراك منتهي</h3><div class="num">${expiredTraders}</div></div>
-            <div class="card"><h3>المفاتيح المتوفرة</h3><div class="num">${allKeys.length}</div></div>
-        </div>
+            <div class="stats-grid">
+                <div class="card"><h3>المشتركين</h3><div class="num" style="color:#1a73e8">${totalTraders}</div></div>
+                <div class="card"><h3>النشطين</h3><div class="num" style="color:#00c851">${activeTraders}</div></div>
+                <div class="card"><h3>المفاتيح</h3><div class="num" style="color:#ffbb33">${allKeys.length}</div></div>
+                <div class="card"><h3>عمليات مسجلة</h3><div class="num" style="color:#ff4444">${globalLogs.length}</div></div>
+            </div>
 
-        <div class="table-box">
-            <h3>👥 قائمة التجار</h3>
-            <table>
-                <thead>
-                    <tr>
-                        <th>الآيدي</th>
-                        <th>الاسم</th>
-                        <th>الحالة</th>
-                        <th>تاريخ الانتهاء</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${tradersArr.map(([id, t]) => {
-                        const active = isTraderActive(t);
-                        const date = t.expiresAt ? new Date(t.expiresAt).toLocaleDateString('ar-SA') : '-';
-                        return `
+            <div class="section">
+                <h2>📡 آخر العمليات الحية (Log)</h2>
+                <table>
+                    <thead>
                         <tr>
-                            <td>${id}</td>
-                            <td>${t.name || 'غير معروف'}</td>
-                            <td><span class="${active ? 'status-active' : 'status-expired'}">${active ? 'نشط' : 'منتهي'}</span></td>
-                            <td dir="ltr">${date}</td>
+                            <th>الوقت</th>
+                            <th>التاجر</th>
+                            <th>نوع العملية</th>
+                            <th>الكود / الآيدي</th>
+                            <th>النتيجة</th>
                         </tr>
-                        `;
-                    }).join('')}
-                </tbody>
-            </table>
+                    </thead>
+                    <tbody>
+                        ${globalLogs.map(log => {
+                            const date = new Date(log.time).toLocaleTimeString('en-US', {hour12:false, timeZone:'Asia/Riyadh'});
+                            
+                            // اسم التاجر من الذاكرة
+                            const traderName = allTraders[log.traderId]?.name || log.traderId;
+                            
+                            // تنسيق نوع العملية
+                            let typeAr = log.type;
+                            if(log.type === 'activate') typeAr = '⚡ تفعيل';
+                            if(log.type === 'check') typeAr = '🧪 فحص';
+                            if(log.type === 'player') typeAr = '🎮 استعلام';
+
+                            // تنسيق الحالة واللون
+                            let statusClass = 'info';
+                            let statusText = log.result;
+                            
+                            if(log.result === 'success' || log.result === 'activated') { statusClass = 'success'; statusText = 'ناجح'; }
+                            else if(log.result === 'failed' || log.result === 'invalid') { statusClass = 'failed'; statusText = 'فشل'; }
+                            else if(log.result === 'already_used') { statusClass = 'warning'; statusText = 'مستخدم'; }
+                            else if(log.result === 'unactivated') { statusClass = 'info'; statusText = 'جديد'; }
+
+                            return `
+                            <tr>
+                                <td dir="ltr">${date}</td>
+                                <td><b>${traderName}</b></td>
+                                <td>${typeAr}</td>
+                                <td style="font-family:monospace">${log.code || log.player_id || '-'}</td>
+                                <td><span class="badge ${statusClass}">${statusText}</span></td>
+                            </tr>
+                            `;
+                        }).join('')}
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="section">
+                <h2>👥 المشتركين</h2>
+                <table>
+                    <thead><tr><th>الاسم</th><th>الآيدي</th><th>الحالة</th><th>الانتهاء</th></tr></thead>
+                    <tbody>
+                        ${tradersArr.map(([id, t]) => `
+                            <tr>
+                                <td>${t.name || 'بدون اسم'}</td>
+                                <td>${id}</td>
+                                <td>${isTraderActive(t) ? '✅' : '❌'}</td>
+                                <td dir="ltr">${t.expiresAt ? new Date(t.expiresAt).toLocaleDateString('en-GB') : '-'}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+
         </div>
+        <script>setTimeout(() => window.location.reload(), 30000);</script>
     </body>
     </html>
     `;
-
+    
     res.send(html);
 });
 
