@@ -2366,7 +2366,50 @@ app.get('/dashboard', async (req, res) => {
     res.send(html);
 });
 
-// 2️⃣ نقطة API لتنفيذ الأدوات من المتصفح
+// 🔧 API للتاجر: تنفيذ أدوات من صفحة التاجر
+app.post('/api/trader_tool', express.json(), async (req, res) => {
+    const { action, token, player_id, uc_code } = req.body;
+
+    // 🔒 التحقق من التوكن
+    const tokenData = traderTokens.get(token);
+    if (!tokenData || Date.now() > tokenData.expiresAt) {
+        return res.json({ success: false, message: 'التوكن منتهي أو غير صالح' });
+    }
+
+    const userId = tokenData.userId;
+    const traderInfo = traders[String(userId)];
+
+    if (!traderInfo) {
+        return res.json({ success: false, message: 'حساب التاجر غير موجود' });
+    }
+
+    try {
+        let result;
+
+        if (action === 'lookup') {
+            if (!player_id) return res.json({ success: false, message: 'Player ID مطلوب' });
+            result = await performPlayerLookup(player_id, userId);
+        }
+        else if (action === 'check') {
+            if (!uc_code) return res.json({ success: false, message: 'UC Code مطلوب' });
+            result = await performCodeCheck(uc_code, userId);
+        }
+        else if (action === 'activate') {
+            if (!player_id || !uc_code) return res.json({ success: false, message: 'Player ID و UC Code مطلوبان' });
+            result = await performCodeActivate(player_id, uc_code, userId);
+        }
+        else {
+            return res.json({ success: false, message: 'عملية غير معروفة' });
+        }
+
+        res.json({ success: true, message: result });
+    } catch (error) {
+        console.error('❌ خطأ في /api/trader_tool:', error.message);
+        res.json({ success: false, message: 'خطأ: ' + error.message });
+    }
+});
+
+// 2️⃣ نقطة API لتنفيذ الأدوات من المتصفح (للمالك)
 app.post('/api/web_tool', async (req, res) => {
     const { pass, type, id, code } = req.body;
     
@@ -2615,6 +2658,42 @@ app.get('/trader', async (req, res) => {
                 <div class="days-badge">باقي ${daysLeft} يوم</div>
             </div>
 
+            <!-- الأدوات -->
+            <div class="tools-section" style="margin-bottom:20px">
+                <div style="background:var(--card); border-radius:12px; padding:20px; box-shadow:0 2px 5px rgba(0,0,0,0.05)">
+                    <h3 style="margin-top:0; border-bottom:2px solid #f4f4f4; padding-bottom:10px">🛠️ أدوات التنفيذ</h3>
+                    
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:15px">
+                        <!-- أداة الاستعلام -->
+                        <div class="tool-card" style="background:#e3f2fd; border-radius:8px; padding:15px">
+                            <h4 style="margin:0 0 10px; color:#1976d2">👤 استعلام عن لاعب</h4>
+                            <input type="text" id="lookup-id" placeholder="أدخل Player ID" style="width:100%; padding:8px; border:1px solid #90caf9; border-radius:5px; margin-bottom:10px">
+                            <button onclick="executeTool('lookup')" style="width:100%; padding:10px; background:#1976d2; color:white; border:none; border-radius:5px; cursor:pointer; font-weight:bold">استعلام</button>
+                        </div>
+
+                        <!-- أداة الفحص -->
+                        <div class="tool-card" style="background:#fff3e0; border-radius:8px; padding:15px">
+                            <h4 style="margin:0 0 10px; color:#f57c00">🔍 فحص كود</h4>
+                            <input type="text" id="check-code" placeholder="أدخل UC Code" style="width:100%; padding:8px; border:1px solid #ffb74d; border-radius:5px; margin-bottom:10px">
+                            <button onclick="executeTool('check')" style="width:100%; padding:10px; background:#f57c00; color:white; border:none; border-radius:5px; cursor:pointer; font-weight:bold">فحص</button>
+                        </div>
+
+                        <!-- أداة التفعيل -->
+                        <div class="tool-card" style="background:#e8f5e9; border-radius:8px; padding:15px">
+                            <h4 style="margin:0 0 10px; color:#388e3c">⚡ تفعيل كود</h4>
+                            <input type="text" id="activate-player" placeholder="Player ID" style="width:100%; padding:8px; border:1px solid #81c784; border-radius:5px; margin-bottom:5px">
+                            <input type="text" id="activate-code" placeholder="UC Code" style="width:100%; padding:8px; border:1px solid #81c784; border-radius:5px; margin-bottom:10px">
+                            <button onclick="executeTool('activate')" style="width:100%; padding:10px; background:#388e3c; color:white; border:none; border-radius:5px; cursor:pointer; font-weight:bold">تفعيل</button>
+                        </div>
+                    </div>
+
+                    <!-- مربع النتيجة -->
+                    <div id="result-box" style="margin-top:15px; padding:15px; background:#f5f5f5; border-radius:8px; border-right:4px solid #3498db; display:none">
+                        <pre id="result-text" style="margin:0; white-space:pre-wrap; font-family:monospace; font-size:13px; color:#333"></pre>
+                    </div>
+                </div>
+            </div>
+
             <div class="stats">
                 <div class="stat-card">
                     <h3>نجاح تفعيل</h3>
@@ -2673,6 +2752,55 @@ app.get('/trader', async (req, res) => {
             
             <p style="text-align:center; color:#999; font-size:12px; margin-top:20px">تحديث تلقائي من قاعدة البيانات 🟢</p>
         </div>
+
+        <script>
+            const token = new URLSearchParams(window.location.search).get('token');
+            
+            async function executeTool(action) {
+                const resultBox = document.getElementById('result-box');
+                const resultText = document.getElementById('result-text');
+                
+                let data = { action, token };
+                
+                if (action === 'lookup') {
+                    data.player_id = document.getElementById('lookup-id').value.trim();
+                    if (!data.player_id) return alert('أدخل Player ID');
+                }
+                else if (action === 'check') {
+                    data.uc_code = document.getElementById('check-code').value.trim();
+                    if (!data.uc_code) return alert('أدخل UC Code');
+                }
+                else if (action === 'activate') {
+                    data.player_id = document.getElementById('activate-player').value.trim();
+                    data.uc_code = document.getElementById('activate-code').value.trim();
+                    if (!data.player_id || !data.uc_code) return alert('أدخل Player ID و UC Code');
+                }
+                
+                resultBox.style.display = 'block';
+                resultText.textContent = '⏳ جارٍ التنفيذ...';
+                
+                try {
+                    const response = await fetch('/api/trader_tool', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(data)
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        resultText.textContent = result.message;
+                        resultBox.style.borderRightColor = '#27ae60';
+                    } else {
+                        resultText.textContent = '❌ ' + result.message;
+                        resultBox.style.borderRightColor = '#e74c3c';
+                    }
+                } catch (error) {
+                    resultText.textContent = '❌ خطأ في الاتصال: ' + error.message;
+                    resultBox.style.borderRightColor = '#e74c3c';
+                }
+            }
+        </script>
     </body>
     </html>
     `;
