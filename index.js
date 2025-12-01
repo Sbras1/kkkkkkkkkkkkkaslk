@@ -1123,19 +1123,36 @@ bot.on("message", async (msg) => {
           ? formatDateTimeFromUnix(d.activated_at)
           : "-";
 
+        // التحقق من رسالة "already activated"
+        const isAlreadyUsed = (d.message || "").toLowerCase().includes("already");
+
         if (status === "activated") {
-          const reply =
-            "✅ الكود مُفعّل\n" +
-            `• الكود: ${d.uc_code}\n` +
-            `• الكمية: ${amount} UC\n` +
-            `• تم التفعيل على ID: ${activatedTo}\n` +
-            `• وقت التفعيل: ${activatedAtStr}\n` +
-            `• وقت الفحص: ${nowStr}`;
+          let reply;
+          
+          if (isAlreadyUsed) {
+            // الكود مستخدم مسبقاً
+            reply =
+              "⚠️ الكود مستخدم مسبقاً\n" +
+              `• الكود: ${d.uc_code}\n` +
+              `• الكمية: ${amount} UC\n` +
+              `• تم التفعيل على ID: ${activatedTo}\n` +
+              `• وقت التفعيل: ${activatedAtStr}\n` +
+              `• وقت الفحص: ${nowStr}`;
+          } else {
+            // الكود مفعّل الآن
+            reply =
+              "✅ الكود مُفعّل\n" +
+              `• الكود: ${d.uc_code}\n` +
+              `• الكمية: ${amount} UC\n` +
+              `• تم التفعيل على ID: ${activatedTo}\n` +
+              `• وقت التفعيل: ${activatedAtStr}\n` +
+              `• وقت الفحص: ${nowStr}`;
+          }
 
           await bot.sendMessage(chatId, reply);
 
           // بث مباشر للفحص
-          await streamLog(msg.from, "فحص كود 🧪", d.uc_code, "activated");
+          await streamLog(msg.from, "فحص كود 🧪", d.uc_code, isAlreadyUsed ? "already_used" : "activated");
 
           await logOperation(userId, {
             type: "check",
@@ -1143,7 +1160,7 @@ bot.on("message", async (msg) => {
             amount,
             activated_to: activatedTo,
             activated_at: d.activated_at || null,
-            result: "activated",
+            result: isAlreadyUsed ? "already_used" : "activated",
           });
         } else if (status === "unactivated") {
           const reply =
