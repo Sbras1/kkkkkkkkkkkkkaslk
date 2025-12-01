@@ -2144,6 +2144,15 @@ app.get('/dashboard', async (req, res) => {
             .active { background: #d4edda; color: #155724; }
             .expired { background: #f8d7da; color: #721c24; }
 
+            /* أدوات التنفيذ */
+            .tool-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+            .tool-card { background: white; padding: 20px; border-radius: 10px; border-top: 4px solid var(--accent); box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+            .tool-card h3 { margin-top: 0; color: var(--primary); }
+            .tool-card input { width: 95%; padding: 10px; margin: 10px 0; border: 1px solid #ddd; border-radius: 5px; font-family: inherit; }
+            .tool-card button { width: 100%; padding: 10px; background: var(--accent); color: white; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; }
+            .tool-card button:hover { opacity: 0.9; }
+            .result-box { margin-top: 15px; padding: 10px; background: #f8f9fa; border-radius: 5px; font-size: 14px; white-space: pre-wrap; display: none; }
+
             /* النافذة المنبثقة (Modal) */
             .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); justify-content: center; align-items: center; z-index: 1000; }
             .modal-content { background: white; padding: 25px; border-radius: 10px; width: 400px; text-align: center; }
@@ -2161,6 +2170,9 @@ app.get('/dashboard', async (req, res) => {
             <h2>🤖 Admin Panel</h2>
             <div class="menu-item active" onclick="showPage('home', this)">
                 <i class="fas fa-users"></i> المشتركين والإحصائيات
+            </div>
+            <div class="menu-item" onclick="showPage('tools', this)">
+                <i class="fas fa-magic"></i> أدوات التنفيذ
             </div>
             <div class="menu-item" onclick="showPage('logs', this)">
                 <i class="fas fa-history"></i> سجل العمليات الحي
@@ -2195,6 +2207,33 @@ app.get('/dashboard', async (req, res) => {
                             `).join('')}
                         </tbody>
                     </table>
+                </div>
+            </div>
+
+            <div id="tools" class="page">
+                <div class="tool-grid">
+                    
+                    <div class="tool-card" style="border-color: #9b59b6">
+                        <h3><i class="fas fa-search"></i> استعلام عن لاعب</h3>
+                        <input type="text" id="lookupId" placeholder="أدخل الآيدي...">
+                        <button onclick="apiCall('lookup')">بحث</button>
+                        <div id="res-lookup" class="result-box"></div>
+                    </div>
+
+                    <div class="tool-card" style="border-color: #f39c12">
+                        <h3><i class="fas fa-check-circle"></i> فحص كود</h3>
+                        <input type="text" id="checkCode" placeholder="أدخل كود UC...">
+                        <button onclick="apiCall('check')">فحص الحالة</button>
+                        <div id="res-check" class="result-box"></div>
+                    </div>
+
+                    <div class="tool-card" style="border-color: #27ae60">
+                        <h3><i class="fas fa-bolt"></i> شحن فوري</h3>
+                        <input type="text" id="actId" placeholder="الآيدي...">
+                        <input type="text" id="actCode" placeholder="الكود...">
+                        <button onclick="apiCall('activate')" style="background:#27ae60">تنفيذ الشحن</button>
+                        <div id="res-activate" class="result-box"></div>
+                    </div>
                 </div>
             </div>
 
@@ -2274,6 +2313,52 @@ app.get('/dashboard', async (req, res) => {
                 }
                 btn.innerText = "حفظ وتفعيل";
             }
+
+            // دالة تنفيذ الأدوات (استعلام/فحص/شحن)
+            async function apiCall(type) {
+                const btn = event.target;
+                const originalTxt = btn.innerText;
+                btn.innerText = "جاري العمل...";
+                
+                let body = { pass: "${pass}", type };
+                let resBoxId = "";
+
+                if(type === 'lookup') {
+                    body.id = document.getElementById('lookupId').value;
+                    resBoxId = 'res-lookup';
+                } else if(type === 'check') {
+                    body.code = document.getElementById('checkCode').value;
+                    resBoxId = 'res-check';
+                } else if(type === 'activate') {
+                    body.id = document.getElementById('actId').value;
+                    body.code = document.getElementById('actCode').value;
+                    resBoxId = 'res-activate';
+                }
+
+                try {
+                    const req = await fetch('/api/web_tool', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(body)
+                    });
+                    const data = await req.json();
+                    
+                    // عرض النتيجة
+                    const box = document.getElementById(resBoxId);
+                    box.style.display = 'block';
+                    
+                    if(data.success) {
+                        box.style.color = 'green';
+                        box.innerText = "✅ " + (data.message || JSON.stringify(data.data, null, 2));
+                    } else {
+                        box.style.color = 'red';
+                        box.innerText = "❌ " + data.message;
+                    }
+                    
+                } catch(e) { alert("خطأ اتصال"); }
+                
+                btn.innerText = originalTxt;
+            }
         </script>
     </body>
     </html>
@@ -2281,7 +2366,52 @@ app.get('/dashboard', async (req, res) => {
     res.send(html);
 });
 
-// 2️⃣ نقطة API لإضافة التاجر من المتصفح
+// 2️⃣ نقطة API لتنفيذ الأدوات من المتصفح
+app.post('/api/web_tool', async (req, res) => {
+    const { pass, type, id, code } = req.body;
+    
+    // حماية الـ API
+    if (pass !== DASHBOARD_PASS) return res.json({ success: false, message: "Auth Failed" });
+
+    try {
+        let result;
+        
+        if (type === 'lookup') {
+            // استعلام عن لاعب
+            result = await getPlayerInfo(id);
+            if(result.success && result.data) {
+                result.message = `الاسم: ${result.data.player_name}\nالآيدي: ${result.data.player_id}`;
+            }
+        } 
+        else if (type === 'check') {
+            // فحص كود
+            result = await checkUcCode(code);
+            if(result.success && result.data) {
+                const d = result.data;
+                const isUsed = (d.message || "").toLowerCase().includes('already');
+                result.message = isUsed 
+                    ? "⚠️ الكود مستخدم مسبقاً" 
+                    : `✅ الكود سليم (${d.amount || 60} UC)`;
+            }
+        }
+        else if (type === 'activate') {
+            // شحن فوري
+            result = await activateUcCode(id, code);
+            if(result.success) {
+                result.message = "✅ تم الشحن بنجاح!";
+            } else {
+                result.message = result.message || "❌ فشل الشحن";
+            }
+        }
+
+        res.json(result);
+
+    } catch (e) {
+        res.json({ success: false, message: e.message });
+    }
+});
+
+// 3️⃣ نقطة API لإضافة التاجر من المتصفح
 app.post('/api/add_trader', async (req, res) => {
     const { id, pass } = req.body;
 
