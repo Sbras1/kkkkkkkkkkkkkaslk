@@ -2388,24 +2388,45 @@ app.post('/api/trader_tool', express.json(), async (req, res) => {
 
         if (action === 'lookup') {
             if (!player_id) return res.json({ success: false, message: 'Player ID مطلوب' });
-            result = await performPlayerLookup(player_id, userId);
+            
+            // استعلام عن لاعب
+            result = await getPlayerInfo(player_id);
+            if(result.success && result.data) {
+                result.message = `الاسم: ${result.data.player_name}\nالآيدي: ${result.data.player_id}`;
+            }
         }
         else if (action === 'check') {
             if (!uc_code) return res.json({ success: false, message: 'UC Code مطلوب' });
-            result = await performCodeCheck(uc_code, userId);
+            
+            // فحص كود
+            result = await checkUcCode(uc_code);
+            if(result.success && result.data) {
+                const d = result.data;
+                const isUsed = (d.message || "").toLowerCase().includes('already');
+                result.message = isUsed 
+                    ? "⚠️ الكود مستخدم مسبقاً" 
+                    : `✅ الكود سليم (${d.amount || 60} UC)`;
+            }
         }
         else if (action === 'activate') {
             if (!player_id || !uc_code) return res.json({ success: false, message: 'Player ID و UC Code مطلوبان' });
-            result = await performCodeActivate(player_id, uc_code, userId);
+            
+            // شحن فوري
+            result = await activateUcCode(player_id, uc_code);
+            if(result.success) {
+                result.message = "✅ تم الشحن بنجاح!";
+            } else {
+                result.message = result.message || "❌ فشل الشحن";
+            }
         }
         else {
             return res.json({ success: false, message: 'عملية غير معروفة' });
         }
 
-        res.json({ success: true, message: result });
+        res.json(result);
     } catch (error) {
         console.error('❌ خطأ في /api/trader_tool:', error.message);
-        res.json({ success: false, message: 'خطأ: ' + error.message });
+        res.json({ success: false, message: error.message });
     }
 });
 
@@ -2778,6 +2799,7 @@ app.get('/trader', async (req, res) => {
                 
                 resultBox.style.display = 'block';
                 resultText.textContent = '⏳ جارٍ التنفيذ...';
+                resultBox.style.borderRightColor = '#3498db';
                 
                 try {
                     const response = await fetch('/api/trader_tool', {
@@ -2789,15 +2811,15 @@ app.get('/trader', async (req, res) => {
                     const result = await response.json();
                     
                     if (result.success) {
-                        resultText.textContent = result.message;
                         resultBox.style.borderRightColor = '#27ae60';
+                        resultText.textContent = "✅ " + (result.message || JSON.stringify(result.data, null, 2));
                     } else {
-                        resultText.textContent = '❌ ' + result.message;
                         resultBox.style.borderRightColor = '#e74c3c';
+                        resultText.textContent = "❌ " + result.message;
                     }
                 } catch (error) {
-                    resultText.textContent = '❌ خطأ في الاتصال: ' + error.message;
                     resultBox.style.borderRightColor = '#e74c3c';
+                    resultText.textContent = '❌ خطأ في الاتصال: ' + error.message;
                 }
             }
         </script>
