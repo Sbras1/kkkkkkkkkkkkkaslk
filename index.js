@@ -300,9 +300,18 @@ async function getPlayerInfo(playerId) {
 }
 
 async function checkUcCode(ucCode) {
+  // 1. تنظيف الكود من أي مسافات أو نزول سطر (مهم جداً)
+  const cleanCode = (ucCode || "").toString().trim();
+
+  // 2. طباعة الكود في الكونسول للتأكد مما يتم إرساله
+  console.log(`🔍 جاري فحص الكود: "${cleanCode}"`);
+
   return apiPost(
     "/checkCode",
-    { uc_code: ucCode, show_time: true },
+    { 
+        "uc_code": cleanCode, // ✅ العودة للاسم الرسمي
+        "show_time": true      // لمعرفة وقت الاستخدام
+    },
     "checkCode"
   );
 }
@@ -796,7 +805,8 @@ bot.on("message", async (msg) => {
     /^\/حذف_تاجر/i.test(text) ||
     /^\/قائمة_التجار$/i.test(text) ||
     /^\/توليد/i.test(text) ||
-    /^\/تفعيل/i.test(text)
+    /^\/تفعيل/i.test(text) ||
+    /^\/web$/i.test(text)
   ) {
     return;
   }
@@ -2314,6 +2324,223 @@ app.post('/api/add_trader', async (req, res) => {
     } catch (e) {
         res.json({ success: false, error: e.message });
     }
+});
+
+// ==================================================
+// 👤 لوحة تحكم التاجر (Client Dashboard)
+// المميزات: رابط سحري + إحصائيات شخصية + سجلات
+// ==================================================
+
+// رابط Render الخاص بك (استبدل باسم تطبيقك الحقيقي)
+const SITE_URL = process.env.SITE_URL || "https://kkkkkkkkkkkkkaslk.onrender.com";
+
+// ذاكرة مؤقتة لتخزين روابط الدخول (Tokens) مع وقت الانتهاء
+const traderTokens = new Map(); 
+
+// تنظيف التوكنات المنتهية كل ساعة (منع تسريب الذاكرة)
+setInterval(() => {
+    const now = Date.now();
+    for (const [token, data] of traderTokens.entries()) {
+        if (now > data.expiresAt) {
+            traderTokens.delete(token);
+        }
+    }
+}, 3600000); // كل ساعة
+
+// 1️⃣ أمر توليد رابط الدخول (داخل تليجرام)
+bot.onText(/^\/web$/i, async (msg) => {
+    const chatId = msg.chat.id;
+    const userId = msg.from.id;
+
+    // التأكد أنه مشترك
+    if (!isTrader(userId)) {
+        return bot.sendMessage(chatId, "⛔ هذه الميزة للمشتركين فقط.");
+    }
+
+    // توليد توكن عشوائي
+    const token = Math.random().toString(36).substring(2) + Date.now().toString(36);
+    
+    // حفظ التوكن مع الآيدي + وقت الانتهاء (ساعة واحدة)
+    traderTokens.set(token, {
+        userId: userId,
+        expiresAt: Date.now() + 3600000 // ساعة واحدة
+    });
+
+    // رابط لوحة التحكم
+    const dashboardUrl = `${SITE_URL}/trader?token=${token}`;
+
+    // التحقق: إذا كان الرابط يبدأ بـ https، نضيف زر، وإلا نرسل نص فقط
+    if (dashboardUrl.startsWith('https://')) {
+        // للإنتاج (Render) - مع زر
+        const opts = {
+            reply_markup: {
+                inline_keyboard: [[{ text: "🌐 دخول لوحتي الشخصية", url: dashboardUrl }]]
+            }
+        };
+        
+        await bot.sendMessage(
+            chatId, 
+            "🔐 **رابط لوحة التحكم الخاصة بك:**\nاضغط الزر للدخول، لا تشارك الرابط مع أحد.\n⏰ صلاحية الرابط: ساعة واحدة", 
+            { parse_mode: "Markdown", ...opts }
+        );
+    } else {
+        // للتطوير المحلي (localhost) - رابط نصي فقط
+        await bot.sendMessage(
+            chatId, 
+            `🔐 **رابط لوحة التحكم الخاصة بك:**\n\n\`${dashboardUrl}\`\n\nانسخ الرابط وافتحه في المتصفح.\n⏰ صلاحية الرابط: ساعة واحدة\n\n⚠️ ملاحظة: تليجرام لا يدعم أزرار localhost`, 
+            { parse_mode: "Markdown" }
+        );
+    }
+});
+
+// 2️⃣ صفحة الويب الخاصة بالتاجر
+app.get('/trader', async (req, res) => {
+    const token = req.query.token;
+    const tokenData = traderTokens.get(token);
+
+    // حماية الصفحة: التحقق من صلاحية التوكن
+    if (!tokenData || Date.now() > tokenData.expiresAt) {
+        return res.status(403).send(`
+            <div style='text-align:center; font-family:Tajawal,sans-serif; margin-top:50px; padding:20px'>
+                <h2>⛔ الرابط غير صالح أو منتهي الصلاحية</h2>
+                <p style='color:#777'>اكتب <code>/web</code> في البوت للحصول على رابط جديد.</p>
+            </div>
+        `);
+    }
+
+    const userId = tokenData.userId;
+    const traderInfo = traders[String(userId)];
+
+    if (!traderInfo) {
+        return res.status(403).send("<h2 style='text-align:center; margin-top:50px'>⛔ حساب غير موجود</h2>");
+    }
+    
+    // جلب سجلات هذا التاجر فقط
+    const { items: logs, stats } = await getTraderLogs(userId, { limit: 50 }); // آخر 50 عملية
+
+    // حساب الأيام المتبقية
+    const now = Date.now();
+    const expireTime = traderInfo.expiresAt || 0;
+    const daysLeft = Math.max(0, Math.ceil((expireTime - now) / (1000 * 60 * 60 * 24)));
+
+    let html = `
+    <!DOCTYPE html>
+    <html dir="rtl" lang="ar">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>لوحة التاجر | ${traderInfo.name}</title>
+        <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;700&display=swap" rel="stylesheet">
+        <style>
+            :root { --bg: #f0f2f5; --card: #fff; --text: #333; --primary: #3498db; }
+            body { font-family: 'Tajawal', sans-serif; background: var(--bg); margin: 0; padding: 20px; color: var(--text); }
+            .container { max-width: 800px; margin: 0 auto; }
+            
+            /* الهيدر */
+            .header { background: linear-gradient(135deg, #2c3e50, #3498db); color: white; padding: 20px; border-radius: 15px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 4px 15px rgba(52, 152, 219, 0.3); }
+            .user-info h2 { margin: 0; font-size: 20px; }
+            .user-info p { margin: 5px 0 0; opacity: 0.9; font-size: 14px; }
+            .days-badge { background: rgba(255,255,255,0.2); padding: 5px 15px; border-radius: 20px; font-weight: bold; }
+
+            /* الإحصائيات */
+            .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 20px; }
+            .stat-card { background: var(--card); padding: 15px; border-radius: 10px; text-align: center; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+            .stat-card h3 { margin: 0; font-size: 12px; color: #777; }
+            .stat-card .num { font-size: 24px; font-weight: bold; color: var(--primary); margin-top: 5px; }
+
+            /* الجدول */
+            .table-container { background: var(--card); border-radius: 12px; padding: 15px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); overflow-x: auto; }
+            h3.title { margin-top: 0; border-bottom: 2px solid #f4f4f4; padding-bottom: 10px; }
+            table { width: 100%; border-collapse: collapse; min-width: 500px; }
+            th, td { padding: 12px; text-align: right; border-bottom: 1px solid #eee; font-size: 14px; }
+            th { color: #555; background: #f9f9f9; }
+            
+            .status { padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; }
+            .s-success { background: #d4edda; color: #155724; }
+            .s-failed { background: #f8d7da; color: #721c24; }
+            .s-used { background: #fff3cd; color: #856404; }
+            
+            .code-box { font-family: monospace; background: #f8f9fa; padding: 2px 5px; border-radius: 4px; color: #c0392b; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <div class="user-info">
+                    <h2>مرحباً، ${traderInfo.name} 👋</h2>
+                    <p>ID: ${userId}</p>
+                </div>
+                <div class="days-badge">باقي ${daysLeft} يوم</div>
+            </div>
+
+            <div class="stats">
+                <div class="stat-card">
+                    <h3>نجاح تفعيل</h3>
+                    <div class="num" style="color:#27ae60">${stats.activate || 0}</div>
+                </div>
+                <div class="stat-card">
+                    <h3>فحص أكواد</h3>
+                    <div class="num" style="color:#f39c12">${stats.check || 0}</div>
+                </div>
+                <div class="stat-card">
+                    <h3>استعلام</h3>
+                    <div class="num" style="color:#3498db">${stats.player || 0}</div>
+                </div>
+            </div>
+
+            <div class="table-container">
+                <h3 class="title">📝 سجل آخر 50 عملية</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>الوقت</th>
+                            <th>العملية</th>
+                            <th>التفاصيل</th>
+                            <th>الحالة</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${logs.map(log => {
+                            let statusClass = 's-failed';
+                            let statusTxt = log.result;
+                            
+                            if(log.result === 'success' || log.result === 'activated') { statusClass = 's-success'; statusTxt = 'ناجح'; }
+                            else if(log.result === 'already_used') { statusClass = 's-used'; statusTxt = 'مستخدم'; }
+                            else if(log.result === 'unactivated') { statusClass = 's-success'; statusTxt = 'متاح'; }
+
+                            let typeAr = log.type;
+                            if(log.type === 'activate') typeAr = '⚡ شحن';
+                            if(log.type === 'check') typeAr = '🔍 فحص';
+                            if(log.type === 'player') typeAr = '👤 استعلام';
+
+                            const time = new Date(log.time).toLocaleTimeString('en-US', {hour12:false});
+                            const details = log.code || log.player_id || '-';
+
+                            return `
+                            <tr>
+                                <td dir="ltr">${time}</td>
+                                <td>${typeAr}</td>
+                                <td class="code-box">${details}</td>
+                                <td><span class="status ${statusClass}">${statusTxt}</span></td>
+                            </tr>
+                            `;
+                        }).join('')}
+                    </tbody>
+                </table>
+            </div>
+            
+            <p style="text-align:center; color:#999; font-size:12px; margin-top:20px">تحديث تلقائي من قاعدة البيانات 🟢</p>
+        </div>
+    </body>
+    </html>
+    `;
+
+    res.send(html);
+});
+
+// توجيه الصفحة الرئيسية إلى لوحة التحكم مباشرة
+app.get('/', (req, res) => {
+    res.redirect('/dashboard?pass=admin123');
 });
 
 app.listen(PORT, () => {
