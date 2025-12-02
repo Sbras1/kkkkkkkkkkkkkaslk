@@ -34,7 +34,7 @@ const BOT_TOKEN = (process.env.BOT_TOKEN || "").trim();
 const API_KEY = (process.env.API_KEY || "").trim();
 const OWNER_ID = process.env.OWNER_ID ? Number(process.env.OWNER_ID) : null;
 const ADMIN_GROUP_ID = -1001767287162; // قروب الإدارة للتذاكر
-const TRADERS_FILE = "traders.json"; // ملف النسخ الاحتياطي
+const TRADERS_FILE = __dirname + "/traders.json"; // ملف النسخ الاحتياطي
 
 // 📺 آيدي قناة البث المباشر
 const LOG_CHANNEL_ID = -1001772815254;
