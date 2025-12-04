@@ -1932,64 +1932,8 @@ bot.on("inline_query", async (iq) => {
           result: "success_inline",
         });
       }
-    } else if (q.length >= 6) {
-      // غير أرقام بالكامل → نفترض كود UC
-      const ucCode = q;
-      const data = await checkUcCode(ucCode);
-      const nowStr = formatNow();
-
-      if (data.success && data.data) {
-        const d = data.data;
-        const status = normalizeCodeStatus(d.status);
-        const amount = d.amount || "-";
-
-        let title = "";
-        let desc = "";
-        let text = "";
-
-        if (status === "activated") {
-          title = "✅ الكود مُفعّل";
-          desc = `كود: ${d.uc_code} — ${amount} UC`;
-          text =
-            "✅ الكود مُفعّل\n" +
-            `• الكود: ${d.uc_code}\n` +
-            `• الكمية: ${amount} UC\n` +
-            `• وقت الفحص: ${nowStr}`;
-        } else if (status === "unactivated") {
-          title = "ℹ️ الكود غير مفعّل";
-          desc = `كود: ${d.uc_code} — ${amount} UC`;
-          text =
-            "ℹ️ الكود غير مفعّل\n" +
-            `• الكود: ${d.uc_code}\n` +
-            `• الكمية: ${amount} UC\n` +
-            `• وقت الفحص: ${nowStr}`;
-        } else {
-          title = "❌ الكود غير صالح";
-          desc = `كود: ${d.uc_code || ucCode}`;
-          text =
-            "❌ حالة الكود: غير صالح\n" +
-            `• الكود: ${d.uc_code || ucCode}\n` +
-            `• وقت الفحص: ${nowStr}`;
-        }
-
-        results.push({
-          type: "article",
-          id: "code-" + ucCode,
-          title,
-          description: desc,
-          input_message_content: {
-            message_text: text,
-          },
-        });
-
-        await logOperation(fromId, {
-          type: "check",
-          code: d.uc_code || ucCode,
-          amount,
-          result: status,
-        });
-      }
     }
+    // تم إلغاء فحص الكود من Inline Mode
   } catch (err) {
     console.error("inline_query error:", err.message);
   }
